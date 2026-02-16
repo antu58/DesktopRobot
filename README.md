@@ -28,8 +28,15 @@
 git clone <repository-url>
 cd DesktopRobot
 
-# 依赖安装与运行方式将随技术栈确定后补充
+# 一键本地 Docker 部署 Soul 服务
+./deploy_local.sh
 ```
+
+可选命令：
+- `./deploy_local.sh status`
+- `./deploy_local.sh logs`
+- `./deploy_local.sh down`
+- `./deploy_local.sh restart`
 
 ## 开发说明
 

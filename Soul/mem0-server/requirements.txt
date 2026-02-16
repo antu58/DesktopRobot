@@ -1,0 +1,9 @@
+fastapi==0.115.8
+uvicorn==0.34.0
+pydantic==2.10.4
+mem0ai>=0.1.48
+python-dotenv==1.0.1
+psycopg[pool,binary]>=3.2.8
+langchain-neo4j>=0.2.0
+rank-bm25>=0.2.2
+fastembed>=0.5.0
