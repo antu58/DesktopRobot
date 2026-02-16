@@ -1,0 +1,32 @@
+协议： MQTT
+
+LLM：支持 Claude API 与 OpenAI 兼容接口格式
+  - Claude：通过 Anthropic API（或兼容 Claude 的代理）调用，请求/响应按 Claude 规范
+  - OpenAI：通过 OpenAI API 或兼容 OpenAI 格式的代理（如 Azure OpenAI、各类中转）调用，请求/响应按 Chat Completions 规范
+
+性格设置：MBTI
+Extraversion (E)（外向）(0) – Introversion (I)（內向）(10)
+Sensing      (S)（感覺）(0) – Intuition    (N)（直覺）(10)
+Thinking     (T)（思考）(0) – Feeling      (F)（情感）(10)
+Judging      (J)（判斷）(0) – Perceiving   (P)（感知）(10)
+
+记忆：
++---------------------------------------------+
+|             Memory Management Service        |
+|---------------------------------------------|
+|  1) Short-Term Memory (STM)                 |
+|     会话上下文 + 当前任务状态                |
+|     - 参与当前推理过程                       |
+|     - 随会话结束摘要并下放到长期结构        |
+|---------------------------------------------|
+|  2) Mid-Term / Episodic Memory              |
+|     会话摘要、行为片段                       |
+|     - 用于提升跨会话连贯推理                 |
+|---------------------------------------------|
+|  3) Long-Term Memory (LTM)                  |
+|     持久用户偏好、角色/灵魂属性、重要事实   |
+|     - 图结构/向量数据库存储                 |
+|     - 权重、关联关系与时间衰减机制          |
++---------------------------------------------+
+
+预选开源方案： Mem0
