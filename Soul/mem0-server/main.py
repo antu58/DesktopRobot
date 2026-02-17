@@ -35,10 +35,14 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gpt-4.1-nano-2025-04-14")
 MEM0_EMBED_PROVIDER = os.environ.get("MEM0_EMBED_PROVIDER", "openai")
 MEM0_EMBED_MODEL = os.environ.get("MEM0_EMBED_MODEL", "text-embedding-3-small")
+_default_embed_dims = "1536"
+if MEM0_EMBED_PROVIDER == "fastembed":
+    _default_embed_dims = "1024"
+MEM0_EMBED_DIMS = int(os.environ.get("MEM0_EMBED_DIMS", _default_embed_dims))
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
 
 llm_config = {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": MEM0_LLM_MODEL}
-embedder_config = {"model": MEM0_EMBED_MODEL}
+embedder_config = {"model": MEM0_EMBED_MODEL, "embedding_dims": MEM0_EMBED_DIMS}
 if MEM0_EMBED_PROVIDER == "openai":
     embedder_config["api_key"] = OPENAI_API_KEY
 if OPENAI_BASE_URL:
@@ -71,6 +75,7 @@ DEFAULT_CONFIG = {
             "user": POSTGRES_USER,
             "password": POSTGRES_PASSWORD,
             "collection_name": POSTGRES_COLLECTION_NAME,
+            "embedding_model_dims": MEM0_EMBED_DIMS,
         },
     },
     "graph_store": {
