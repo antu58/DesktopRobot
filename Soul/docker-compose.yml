@@ -106,8 +106,6 @@ services:
         condition: service_healthy
       mqtt:
         condition: service_started
-      mem0:
-        condition: service_started
     ports:
       - "${SOUL_HTTP_PORT}:9010"
 

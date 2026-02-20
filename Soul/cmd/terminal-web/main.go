@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,15 +75,23 @@ func main() {
 
 	r.Post("/ask", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
-			SessionID string `json:"session_id"`
-			Message   string `json:"message"`
+			SessionID string             `json:"session_id"`
+			Inputs    []domain.ChatInput `json:"inputs"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
-		if in.SessionID == "" || in.Message == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session_id and message are required"})
+		if in.SessionID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session_id is required"})
+			return
+		}
+		if len(in.Inputs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "inputs is required"})
+			return
+		}
+		if !hasKeyboardTextInput(in.Inputs) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "currently only input.type=keyboard_text with non-empty text is supported"})
 			return
 		}
 
@@ -91,8 +100,9 @@ func main() {
 			SessionID:  in.SessionID,
 			TerminalID: cfg.TerminalID,
 			SoulHint:   cfg.SoulHint,
-			Message:    in.Message,
+			Inputs:     in.Inputs,
 		}
+
 		buf, _ := json.Marshal(payload)
 
 		httpReq, _ := http.NewRequestWithContext(req.Context(), http.MethodPost, cfg.SoulAPIBaseURL+"/v1/chat", bytes.NewReader(buf))
@@ -277,6 +287,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func hasKeyboardTextInput(inputs []domain.ChatInput) bool {
+	for _, in := range inputs {
+		if strings.EqualFold(strings.TrimSpace(in.Type), "keyboard_text") && strings.TrimSpace(in.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 const indexHTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -318,9 +337,16 @@ const indexHTML = `<!doctype html>
     }
 
     async function askSoul() {
+      const keyboardText = document.getElementById('msg').value;
       const payload = {
         session_id: document.getElementById('session').value,
-        message: document.getElementById('msg').value
+        inputs: [
+          {
+            type: 'keyboard_text',
+            source: 'keyboard',
+            text: keyboardText
+          }
+        ]
       };
       const r = await fetch('/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const out = await r.json();

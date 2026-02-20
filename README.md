@@ -1,52 +1,52 @@
 # Desktop Robot
 
-桌面端 AI 机器人项目 —— 在本地桌面环境运行的智能助手与自动化机器人。
+桌面机器人项目，采用 **Soul（大脑） + Body（躯体）** 架构。
 
-## 项目简介
+## 核心概念
 
-本项目用于开发一款**桌面端 AI 机器人**，可在 macOS / Windows / Linux 等桌面系统中运行，提供对话、任务执行、系统交互等能力。
+- **Soul**：负责对话理解、上下文管理、技能调度与记忆策略。
+- **Body**：负责硬件感知、动作执行、能力上报与输入采集。
+- **Skill**：由 Body 上报的可调用能力，Soul 按 LLM 结果调度。
+- **Session**：单次会话上下文容器，3 分钟无新输入触发总结。
 
-## 目标功能（规划）
+## 当前实现边界（Phase 1）
 
-- **智能对话**：基于大语言模型的自然语言交互
-- **桌面自动化**：控制窗口、快捷键、文件与剪贴板等
-- **多模态**：支持文字、语音、图像输入与输出
-- **本地优先**：优先本地推理与隐私保护，可选云端增强
+- 对话输入统一 `inputs[]`。
+- 主链路仅处理 `keyboard_text`。
+- 通信主协议稳定，技能快照 + 调用回执可闭环。
+- Mem0 不进入同步聊天链路，仅异步流程使用。
 
-## 技术栈
+## 文档导航
 
-项目技术选型待定，可根据需求选择：
+### 全局（Soul / Body 共用）
 
-- **桌面框架**：SwiftUI (macOS)、Electron、Tauri 等
-- **AI 能力**：本地模型 (Ollama / llama.cpp) 或 API (OpenAI / 国产大模型)
-- **语言**：Swift 6 (Apple 生态) / TypeScript / Rust 等
+- `doc/通信协议-v2.md`：唯一通信协议基线
+
+### Soul（仅维护 2 份核心文档 + 1 份 API）
+
+- `Soul/docs/设计目标.md`
+- `Soul/docs/技术调研.md`
+- `Soul/docs/API文档-Soul服务.md`
+
+### Body（仅维护 2 份核心文档）
+
+- `Body/设计目标.md`
+- `Body/技术调研.md`
+
+### 历史归档
+
+- `Soul/docs/archive/`
+- `Body/archive/`
 
 ## 快速开始
 
 ```bash
-# 克隆仓库（若从远程拉取）
-git clone <repository-url>
-cd DesktopRobot
-
-# 一键本地 Docker 部署 Soul 服务
 ./deploy_local.sh
 ```
 
-可选命令：
+常用命令：
+
 - `./deploy_local.sh status`
 - `./deploy_local.sh logs`
-- `./deploy_local.sh down`
 - `./deploy_local.sh restart`
-
-## 开发说明
-
-- 若采用 **Swift / SwiftUI**，将遵循 Swift 6 编码规范与 SwiftUI 最佳实践
-- 若采用 **macOS** 开发，将兼容当前主流 macOS 版本
-
-## 许可证
-
-待定。
-
----
-
-*README 会随项目进展持续更新。*
+- `./deploy_local.sh down`

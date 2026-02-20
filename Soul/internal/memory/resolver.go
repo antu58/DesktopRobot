@@ -1,6 +1,8 @@
 package memory
 
-import "context"
+import (
+	"context"
+)
 
 type TerminalSoulResolver struct {
 	userID string

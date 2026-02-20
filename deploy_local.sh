@@ -47,11 +47,11 @@ wait_http() {
     sleep "${interval}"
   done
 
-  fail "${name} health check failed: ${url}"
+  return 1
 }
 
 validate_env() {
-  local llm_provider openai_api_key mem0_base_url
+  local llm_provider openai_api_key
   llm_provider="$(get_env LLM_PROVIDER)"
   llm_provider="${llm_provider:-openai}"
 
@@ -60,11 +60,6 @@ validate_env() {
     if [[ -z "${openai_api_key}" || "${openai_api_key}" == "replace_with_real_key" ]]; then
       fail "OPENAI_API_KEY is invalid in ${SOUL_DIR}/.env"
     fi
-  fi
-
-  mem0_base_url="$(get_env MEM0_BASE_URL)"
-  if [[ -z "${mem0_base_url}" ]]; then
-    fail "MEM0_BASE_URL is required in ${SOUL_DIR}/.env"
   fi
 }
 
@@ -98,9 +93,11 @@ compose_up() {
   terminal_port="${terminal_port:-9011}"
   mem0_port="${mem0_port:-18000}"
 
-  wait_http "mem0" "http://localhost:${mem0_port}/docs"
-  wait_http "soul-server" "http://localhost:${soul_port}/healthz"
-  wait_http "terminal-web" "http://localhost:${terminal_port}/healthz"
+  if ! wait_http "mem0 (optional)" "http://localhost:${mem0_port}/docs"; then
+    log "mem0 optional check skipped; continue with soul-server and terminal-web"
+  fi
+  wait_http "soul-server" "http://localhost:${soul_port}/healthz" || fail "soul-server health check failed"
+  wait_http "terminal-web" "http://localhost:${terminal_port}/healthz" || fail "terminal-web health check failed"
 
   log "deployment completed"
   log "mem0: http://localhost:${mem0_port}"

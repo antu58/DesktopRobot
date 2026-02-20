@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,7 +72,18 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		s.skillRegistry.SetSoul(req.TerminalID, soulID)
 	}
 
-	if err := s.memoryService.PersistMessage(ctx, req.SessionID, userID, req.TerminalID, soulID, "user", "", "", req.Message); err != nil {
+	keyboardTexts, pendingInputs := extractInputs(req.Inputs)
+	latestUserText := strings.TrimSpace(strings.Join(keyboardTexts, "\n"))
+	if latestUserText == "" {
+		return domain.ChatResponse{}, fmt.Errorf("currently only input.type=keyboard_text with non-empty text is supported")
+	}
+
+	observationDigest := buildPendingInputDigest(pendingInputs)
+	if err := s.memoryService.PersistObservation(ctx, req.SessionID, userID, req.TerminalID, soulID, observationDigest); err != nil {
+		s.logger.Warn("persist observation failed", "error", err)
+	}
+
+	if err := s.memoryService.PersistMessage(ctx, req.SessionID, userID, req.TerminalID, soulID, "user", "", "", latestUserText); err != nil {
 		return domain.ChatResponse{}, err
 	}
 
@@ -80,7 +92,7 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		return domain.ChatResponse{}, err
 	}
 
-	memoryContext, err := s.memoryService.BuildContext(ctx, userID, soulID, req.SessionID, req.TerminalID, req.Message)
+	memoryContext, currentSummary, err := s.memoryService.BuildContext(ctx, soulID, req.SessionID, latestUserText, observationDigest)
 	if err != nil {
 		return domain.ChatResponse{}, err
 	}
@@ -156,12 +168,25 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		return domain.ChatResponse{}, err
 	}
 
+	summaryOut := currentSummary
+	if compressed, changed, compErr := s.memoryService.MaybeCompressSession(ctx, req.SessionID, userID, req.TerminalID, soulID, false); compErr != nil {
+		s.logger.Warn("session compaction failed", "session_id", req.SessionID, "error", compErr)
+	} else if changed || strings.TrimSpace(compressed) != "" {
+		summaryOut = compressed
+	}
+	if strings.TrimSpace(summaryOut) == "" {
+		if latest, latestErr := s.memoryService.GetSessionSummary(ctx, req.SessionID); latestErr == nil {
+			summaryOut = latest
+		}
+	}
+
 	return domain.ChatResponse{
 		SessionID:      req.SessionID,
 		TerminalID:     req.TerminalID,
 		SoulID:         soulID,
 		Reply:          firstResp.Content,
 		ExecutedSkills: executedSkills,
+		ContextSummary: strings.TrimSpace(summaryOut),
 	}, nil
 }
 
@@ -191,4 +216,66 @@ func buildSystemPrompt(memoryContext string, skills []domain.SkillDefinition) st
 	}
 
 	return sb.String()
+}
+
+type pendingInput struct {
+	InputID string
+	Type    string
+	Source  string
+}
+
+func extractInputs(inputs []domain.ChatInput) ([]string, []pendingInput) {
+	keyboardTexts := make([]string, 0, len(inputs))
+	pending := make([]pendingInput, 0, len(inputs))
+
+	for _, in := range inputs {
+		inputType := strings.ToLower(strings.TrimSpace(in.Type))
+		switch inputType {
+		case "keyboard_text":
+			if text := strings.TrimSpace(in.Text); text != "" {
+				keyboardTexts = append(keyboardTexts, text)
+			}
+		default:
+			// TODO(v2): support non-keyboard input types (audio/image/video/sensor_state/...).
+			pending = append(pending, pendingInput{
+				InputID: strings.TrimSpace(in.InputID),
+				Type:    inputType,
+				Source:  strings.TrimSpace(in.Source),
+			})
+		}
+	}
+	return keyboardTexts, pending
+}
+
+func buildPendingInputDigest(pending []pendingInput) string {
+	if len(pending) == 0 {
+		return ""
+	}
+
+	uniqueTypes := map[string]struct{}{}
+	var lines []string
+	for _, p := range pending {
+		if p.Type != "" {
+			uniqueTypes[p.Type] = struct{}{}
+		}
+		if p.Type == "" {
+			p.Type = "unknown"
+		}
+		if p.Source == "" {
+			p.Source = "unknown"
+		}
+		if p.InputID == "" {
+			lines = append(lines, fmt.Sprintf("[input-not-implemented] type=%s source=%s", p.Type, p.Source))
+		} else {
+			lines = append(lines, fmt.Sprintf("[input-not-implemented] type=%s input_id=%s source=%s", p.Type, p.InputID, p.Source))
+		}
+	}
+
+	typeList := make([]string, 0, len(uniqueTypes))
+	for t := range uniqueTypes {
+		typeList = append(typeList, t)
+	}
+	sort.Strings(typeList)
+	lines = append(lines, "未实现输入类型: "+strings.Join(typeList, ", "))
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

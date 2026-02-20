@@ -9,27 +9,32 @@ import (
 )
 
 type SoulServerConfig struct {
-	HTTPAddr         string
-	UserID           string
-	DBDSN            string
-	MQTTBrokerURL    string
-	MQTTClientID     string
-	MQTTUsername     string
-	MQTTPassword     string
-	MQTTTopicPrefix  string
-	LLMProvider      string
-	LLMModel         string
-	OpenAIBaseURL    string
-	OpenAIAPIKey     string
-	AnthropicBaseURL string
-	AnthropicAPIKey  string
-	ToolTimeout      time.Duration
-	ChatHistoryLimit int
-	SkillSnapshotTTL time.Duration
-	Mem0BaseURL      string
-	Mem0APIKey       string
-	Mem0TopK         int
-	Mem0Timeout      time.Duration
+	HTTPAddr                     string
+	UserID                       string
+	DBDSN                        string
+	MQTTBrokerURL                string
+	MQTTClientID                 string
+	MQTTUsername                 string
+	MQTTPassword                 string
+	MQTTTopicPrefix              string
+	LLMProvider                  string
+	LLMModel                     string
+	OpenAIBaseURL                string
+	OpenAIAPIKey                 string
+	AnthropicBaseURL             string
+	AnthropicAPIKey              string
+	ToolTimeout                  time.Duration
+	ChatHistoryLimit             int
+	SkillSnapshotTTL             time.Duration
+	UserIdleTimeout              time.Duration
+	IdleSummaryScanInterval      time.Duration
+	SessionCompressMsgThreshold  int
+	SessionCompressCharThreshold int
+	SessionCompressScanLimit     int
+	Mem0BaseURL                  string
+	Mem0APIKey                   string
+	Mem0Timeout                  time.Duration
+	Mem0AsyncQueueEnabled        bool
 }
 
 type TerminalWebConfig struct {
@@ -49,27 +54,32 @@ type TerminalWebConfig struct {
 
 func LoadSoulServerConfig() (SoulServerConfig, error) {
 	cfg := SoulServerConfig{
-		HTTPAddr:         getenvDefault("SOUL_HTTP_ADDR", ":9010"),
-		UserID:           getenvDefault("USER_ID", "demo-user"),
-		DBDSN:            os.Getenv("DB_DSN"),
-		MQTTBrokerURL:    getenvDefault("MQTT_BROKER_URL", "tcp://localhost:1883"),
-		MQTTClientID:     getenvDefault("SOUL_MQTT_CLIENT_ID", "soul-server"),
-		MQTTUsername:     os.Getenv("MQTT_USERNAME"),
-		MQTTPassword:     os.Getenv("MQTT_PASSWORD"),
-		MQTTTopicPrefix:  getenvDefault("MQTT_TOPIC_PREFIX", "soul"),
-		LLMProvider:      getenvDefault("LLM_PROVIDER", "openai"),
-		LLMModel:         getenvDefault("LLM_MODEL", "gpt-4o-mini"),
-		OpenAIBaseURL:    getenvDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
-		AnthropicBaseURL: getenvDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
-		ToolTimeout:      time.Duration(getenvIntDefault("TOOL_TIMEOUT_SECONDS", 8)) * time.Second,
-		ChatHistoryLimit: getenvIntDefault("CHAT_HISTORY_LIMIT", 20),
-		SkillSnapshotTTL: time.Duration(getenvIntDefault("SKILL_SNAPSHOT_TTL_SECONDS", 60)) * time.Second,
-		Mem0BaseURL:      strings.TrimRight(getenvDefault("MEM0_BASE_URL", "http://localhost:8000"), "/"),
-		Mem0APIKey:       os.Getenv("MEM0_API_KEY"),
-		Mem0TopK:         getenvIntDefault("MEM0_TOP_K", 5),
-		Mem0Timeout:      time.Duration(getenvIntDefault("MEM0_TIMEOUT_SECONDS", 5)) * time.Second,
+		HTTPAddr:                     getenvDefault("SOUL_HTTP_ADDR", ":9010"),
+		UserID:                       getenvDefault("USER_ID", "demo-user"),
+		DBDSN:                        os.Getenv("DB_DSN"),
+		MQTTBrokerURL:                getenvDefault("MQTT_BROKER_URL", "tcp://localhost:1883"),
+		MQTTClientID:                 getenvDefault("SOUL_MQTT_CLIENT_ID", "soul-server"),
+		MQTTUsername:                 os.Getenv("MQTT_USERNAME"),
+		MQTTPassword:                 os.Getenv("MQTT_PASSWORD"),
+		MQTTTopicPrefix:              getenvDefault("MQTT_TOPIC_PREFIX", "soul"),
+		LLMProvider:                  getenvDefault("LLM_PROVIDER", "openai"),
+		LLMModel:                     getenvDefault("LLM_MODEL", "gpt-4o-mini"),
+		OpenAIBaseURL:                getenvDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIAPIKey:                 os.Getenv("OPENAI_API_KEY"),
+		AnthropicBaseURL:             getenvDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+		AnthropicAPIKey:              os.Getenv("ANTHROPIC_API_KEY"),
+		ToolTimeout:                  time.Duration(getenvIntDefault("TOOL_TIMEOUT_SECONDS", 8)) * time.Second,
+		ChatHistoryLimit:             getenvIntDefault("CHAT_HISTORY_LIMIT", 20),
+		SkillSnapshotTTL:             time.Duration(getenvIntDefault("SKILL_SNAPSHOT_TTL_SECONDS", 60)) * time.Second,
+		UserIdleTimeout:              time.Duration(getenvIntDefault("USER_IDLE_TIMEOUT_SECONDS", 180)) * time.Second,
+		IdleSummaryScanInterval:      time.Duration(getenvIntDefault("IDLE_SUMMARY_SCAN_INTERVAL_SECONDS", 15)) * time.Second,
+		SessionCompressMsgThreshold:  getenvIntDefault("SESSION_COMPRESS_MSG_THRESHOLD", 80),
+		SessionCompressCharThreshold: getenvIntDefault("SESSION_COMPRESS_CHAR_THRESHOLD", 12000),
+		SessionCompressScanLimit:     getenvIntDefault("SESSION_COMPRESS_SCAN_LIMIT", 200),
+		Mem0BaseURL:                  strings.TrimRight(getenvDefault("MEM0_BASE_URL", "http://localhost:8000"), "/"),
+		Mem0APIKey:                   os.Getenv("MEM0_API_KEY"),
+		Mem0Timeout:                  time.Duration(getenvIntDefault("MEM0_TIMEOUT_SECONDS", 5)) * time.Second,
+		Mem0AsyncQueueEnabled:        getenvBoolDefault("MEM0_ASYNC_QUEUE_ENABLED", true),
 	}
 
 	if cfg.DBDSN == "" {
@@ -82,10 +92,6 @@ func LoadSoulServerConfig() (SoulServerConfig, error) {
 	if cfg.LLMProvider == "claude" && cfg.AnthropicAPIKey == "" {
 		return SoulServerConfig{}, fmt.Errorf("ANTHROPIC_API_KEY is required when LLM_PROVIDER=claude")
 	}
-	if cfg.Mem0BaseURL == "" {
-		return SoulServerConfig{}, fmt.Errorf("MEM0_BASE_URL is required")
-	}
-
 	return cfg, nil
 }
 
@@ -135,4 +141,19 @@ func getenvInt64Default(key string, val int64) int64 {
 		return val
 	}
 	return n
+}
+
+func getenvBoolDefault(key string, val bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return val
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return val
+	}
 }

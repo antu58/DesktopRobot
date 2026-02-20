@@ -3,11 +3,11 @@ package domain
 import "encoding/json"
 
 type ChatRequest struct {
-	UserID     string `json:"user_id,omitempty"`
-	SessionID  string `json:"session_id"`
-	TerminalID string `json:"terminal_id"`
-	SoulHint   string `json:"soul_hint,omitempty"`
-	Message    string `json:"message"`
+	UserID     string      `json:"user_id,omitempty"`
+	SessionID  string      `json:"session_id"`
+	TerminalID string      `json:"terminal_id"`
+	SoulHint   string      `json:"soul_hint,omitempty"`
+	Inputs     []ChatInput `json:"inputs"`
 }
 
 type ChatResponse struct {
@@ -16,6 +16,7 @@ type ChatResponse struct {
 	SoulID         string   `json:"soul_id"`
 	Reply          string   `json:"reply"`
 	ExecutedSkills []string `json:"executed_skills,omitempty"`
+	ContextSummary string   `json:"context_summary,omitempty"`
 }
 
 type Message struct {
@@ -54,6 +55,26 @@ type LLMRequest struct {
 type LLMResponse struct {
 	Content   string
 	ToolCalls []ToolCall
+}
+
+type ChatInput struct {
+	InputID string          `json:"input_id,omitempty"`
+	Type    string          `json:"type"`
+	Source  string          `json:"source,omitempty"`
+	TS      string          `json:"ts,omitempty"`
+	Text    string          `json:"text,omitempty"`
+	Media   *InputMedia     `json:"media,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+type InputMedia struct {
+	Provider       string `json:"provider,omitempty"`
+	URL            string `json:"url,omitempty"`
+	Bucket         string `json:"bucket,omitempty"`
+	ObjectKey      string `json:"object_key,omitempty"`
+	Mime           string `json:"mime,omitempty"`
+	SizeBytes      int64  `json:"size_bytes,omitempty"`
+	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
 }
 
 // MQTT payloads

@@ -17,6 +17,22 @@ type Mem0Client struct {
 	client  *http.Client
 }
 
+type ExternalMemoryEntry struct {
+	Text       string
+	Role       string
+	UserID     string
+	SoulID     string
+	SessionID  string
+	TerminalID string
+}
+
+type ExternalMemoryFilter struct {
+	UserID     string
+	SoulID     string
+	SessionID  string
+	TerminalID string
+}
+
 func NewMem0Client(baseURL, apiKey string, timeout time.Duration) *Mem0Client {
 	if timeout <= 0 {
 		timeout = 5 * time.Second

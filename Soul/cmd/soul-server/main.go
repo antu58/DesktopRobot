@@ -48,13 +48,43 @@ func main() {
 		os.Exit(1)
 	}
 
-	externalMemory := memory.NewMem0Client(cfg.Mem0BaseURL, cfg.Mem0APIKey, cfg.Mem0Timeout)
-	memorySvc, err := memory.NewService(store, externalMemory, cfg.Mem0TopK)
+	llmProvider, err := llm.NewProvider(llm.Config{
+		Provider:         strings.ToLower(cfg.LLMProvider),
+		Model:            cfg.LLMModel,
+		OpenAIBaseURL:    cfg.OpenAIBaseURL,
+		OpenAIAPIKey:     cfg.OpenAIAPIKey,
+		AnthropicBaseURL: cfg.AnthropicBaseURL,
+		AnthropicAPIKey:  cfg.AnthropicAPIKey,
+	})
+	if err != nil {
+		logger.Error("init llm provider failed", "error", err)
+		os.Exit(1)
+	}
+
+	memorySvc, err := memory.NewService(store, memory.ServiceConfig{
+		LLMProvider:              llmProvider,
+		LLMModel:                 cfg.LLMModel,
+		CompressMessageThreshold: cfg.SessionCompressMsgThreshold,
+		CompressCharThreshold:    cfg.SessionCompressCharThreshold,
+		CompressScanLimit:        cfg.SessionCompressScanLimit,
+		IdleTimeout:              cfg.UserIdleTimeout,
+		IdleSummaryScanInterval:  cfg.IdleSummaryScanInterval,
+		IdleSummaryBatchSize:     50,
+		Mem0AsyncQueueEnabled:    cfg.Mem0AsyncQueueEnabled,
+	}, logger)
 	if err != nil {
 		logger.Error("init memory service failed", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("mem0 external memory enabled", "base_url", cfg.Mem0BaseURL, "top_k", cfg.Mem0TopK)
+	go memorySvc.RunIdleSummaryWorker(ctx)
+	logger.Info("session summary worker enabled",
+		"idle_timeout", cfg.UserIdleTimeout,
+		"scan_interval", cfg.IdleSummaryScanInterval,
+		"compress_msg_threshold", cfg.SessionCompressMsgThreshold,
+		"compress_char_threshold", cfg.SessionCompressCharThreshold,
+		"mem0_async_queue_enabled", cfg.Mem0AsyncQueueEnabled,
+	)
+
 	terminalSoulResolver := memory.NewTerminalSoulResolver(cfg.UserID, memorySvc)
 
 	skillRegistry := skills.NewRegistry(cfg.SkillSnapshotTTL)
@@ -67,19 +97,6 @@ func main() {
 	}, skillRegistry, terminalSoulResolver, logger)
 	if err := mqttHub.Start(ctx); err != nil {
 		logger.Error("start mqtt hub failed", "error", err)
-		os.Exit(1)
-	}
-
-	llmProvider, err := llm.NewProvider(llm.Config{
-		Provider:         strings.ToLower(cfg.LLMProvider),
-		Model:            cfg.LLMModel,
-		OpenAIBaseURL:    cfg.OpenAIBaseURL,
-		OpenAIAPIKey:     cfg.OpenAIAPIKey,
-		AnthropicBaseURL: cfg.AnthropicBaseURL,
-		AnthropicAPIKey:  cfg.AnthropicAPIKey,
-	})
-	if err != nil {
-		logger.Error("init llm provider failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -100,8 +117,16 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 			return
 		}
-		if chatReq.SessionID == "" || chatReq.TerminalID == "" || chatReq.Message == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id, terminal_id, message are required"})
+		if chatReq.SessionID == "" || chatReq.TerminalID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id and terminal_id are required"})
+			return
+		}
+		if len(chatReq.Inputs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "inputs is required"})
+			return
+		}
+		if !hasKeyboardTextInput(chatReq.Inputs) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "currently only input.type=keyboard_text with non-empty text is supported"})
 			return
 		}
 
@@ -143,6 +168,15 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown failed", "error", err)
 	}
+}
+
+func hasKeyboardTextInput(inputs []domain.ChatInput) bool {
+	for _, in := range inputs {
+		if strings.EqualFold(strings.TrimSpace(in.Type), "keyboard_text") && strings.TrimSpace(in.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
