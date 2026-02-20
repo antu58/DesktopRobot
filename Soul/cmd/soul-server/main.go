@@ -61,9 +61,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	mem0Client := memory.NewMem0Client(cfg.Mem0BaseURL, cfg.Mem0APIKey, cfg.Mem0Timeout)
+
 	memorySvc, err := memory.NewService(store, memory.ServiceConfig{
 		LLMProvider:              llmProvider,
 		LLMModel:                 cfg.LLMModel,
+		Mem0Client:               mem0Client,
 		CompressMessageThreshold: cfg.SessionCompressMsgThreshold,
 		CompressCharThreshold:    cfg.SessionCompressCharThreshold,
 		CompressScanLimit:        cfg.SessionCompressScanLimit,

@@ -205,6 +205,45 @@ func startMQTT(ctx context.Context, cfg config.TerminalWebConfig, state *termina
 		return nil, token.Error()
 	}
 
+	statusTopic := mqtt.TopicStatus(cfg.MQTTTopicPrefix, cfg.TerminalID)
+	if token := client.Subscribe(statusTopic, 1, func(_ paho.Client, msg paho.Message) {
+		var payload struct {
+			Status    string `json:"status"`
+			Message   string `json:"message"`
+			SessionID string `json:"session_id"`
+			TS        string `json:"ts"`
+		}
+		logLine := ""
+		if err := json.Unmarshal(msg.Payload(), &payload); err == nil {
+			if payload.Status == "" {
+				payload.Status = "unknown"
+			}
+			if payload.Message != "" {
+				logLine = fmt.Sprintf("%s [status:%s][session:%s] %s", time.Now().Format(time.RFC3339), payload.Status, payload.SessionID, payload.Message)
+			} else {
+				logLine = fmt.Sprintf("%s [status:%s][session:%s]", time.Now().Format(time.RFC3339), payload.Status, payload.SessionID)
+			}
+			state.mu.Lock()
+			state.lastAction = "状态更新: " + payload.Status
+			state.updatedAt = time.Now()
+			state.logs = append(state.logs, logLine)
+			if len(state.logs) > 100 {
+				state.logs = state.logs[len(state.logs)-100:]
+			}
+			state.mu.Unlock()
+			return
+		}
+		logLine = fmt.Sprintf("%s [status:raw] %s", time.Now().Format(time.RFC3339), strings.TrimSpace(string(msg.Payload())))
+		state.mu.Lock()
+		state.logs = append(state.logs, logLine)
+		if len(state.logs) > 100 {
+			state.logs = state.logs[len(state.logs)-100:]
+		}
+		state.mu.Unlock()
+	}); token.Wait() && token.Error() != nil {
+		return nil, token.Error()
+	}
+
 	go func() {
 		heartbeatTicker := time.NewTicker(cfg.HeartbeatInterval)
 		defer heartbeatTicker.Stop()

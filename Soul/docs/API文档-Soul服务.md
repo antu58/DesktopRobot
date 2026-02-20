@@ -70,6 +70,13 @@
 - 每次成功写入用户输入（`role=user`）重置 3 分钟空闲计时。
 - 连续 3 分钟无新输入触发空闲总结。
 
+技能调度规则（当前实现）：
+
+- 默认：单次 LLM，直接选择终端技能并执行。
+- 特殊：若首轮选择内置 `recall_memory`（Mem0 历史回顾），服务端先向终端发送 `status=mem0_searching`，查询后进行第二次 LLM，再执行终端技能。
+- `recall_memory` 仅在 Mem0 就绪时暴露给模型；Mem0 未就绪时不会触发该分支。
+- `executed_skills` 可能包含 `recall_memory`。
+
 成功响应：
 
 ```json
@@ -78,7 +85,7 @@
   "terminal_id": "terminal-001",
   "soul_id": "soul_xxx",
   "reply": "是的，2+2=4。",
-  "executed_skills": ["light_green"],
+  "executed_skills": ["recall_memory", "light_green"],
   "context_summary": "用户持续进行基础事实问答，机器人保持简洁确认式回应。"
 }
 ```

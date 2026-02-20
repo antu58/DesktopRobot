@@ -40,8 +40,21 @@ printf 'round,time_ms,http_code,message\n'
 for ((i=0; i<ROUNDS; i++)); do
   round=$((i + 1))
   msg="${prompts[$i]}"
-  safe_msg="$(printf '%s' "${msg}" | sed 's/"/\\"/g')"
-  payload="{\"session_id\":\"${SESSION_ID}\",\"message\":\"${safe_msg}\"}"
+  payload="$(
+    jq -nc \
+      --arg sid "${SESSION_ID}" \
+      --arg msg "${msg}" \
+      '{
+        session_id: $sid,
+        inputs: [
+          {
+            type: "keyboard_text",
+            source: "keyboard",
+            text: $msg
+          }
+        ]
+      }'
+  )"
   resp_file="${tmp_dir}/round_${round}.json"
 
   meta="$(

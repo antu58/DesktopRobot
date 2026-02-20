@@ -35,6 +35,13 @@ type Hub struct {
 	pending   map[string]chan domain.InvokeResult
 }
 
+type statusEventPayload struct {
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	TS        string `json:"ts"`
+}
+
 type SoulResolver interface {
 	ResolveOrCreateSoul(ctx context.Context, terminalID, soulHint string) (string, error)
 }
@@ -242,4 +249,27 @@ func (h *Hub) InvokeSkill(ctx context.Context, terminalID, skill string, args js
 	case <-time.After(20 * time.Second):
 		return domain.InvokeResult{}, fmt.Errorf("tool timeout")
 	}
+}
+
+func (h *Hub) PublishStatus(_ context.Context, terminalID, status, message, sessionID string) error {
+	if h.client == nil {
+		return fmt.Errorf("mqtt client is not started")
+	}
+	payload := statusEventPayload{
+		Status:    strings.TrimSpace(status),
+		Message:   strings.TrimSpace(message),
+		SessionID: strings.TrimSpace(sessionID),
+		TS:        time.Now().UTC().Format(time.RFC3339),
+	}
+	if payload.Status == "" {
+		payload.Status = "unknown"
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	topic := TopicStatus(h.cfg.TopicPrefix, terminalID)
+	token := h.client.Publish(topic, 1, false, body)
+	token.Wait()
+	return token.Error()
 }

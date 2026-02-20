@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"soul/internal/db"
@@ -15,6 +16,7 @@ import (
 type ServiceConfig struct {
 	LLMProvider              llm.Provider
 	LLMModel                 string
+	Mem0Client               *Mem0Client
 	CompressMessageThreshold int
 	CompressCharThreshold    int
 	CompressScanLimit        int
@@ -28,6 +30,11 @@ type Service struct {
 	store                    *db.Store
 	llmProvider              llm.Provider
 	llmModel                 string
+	mem0Client               *Mem0Client
+	mem0ReadyMu              sync.Mutex
+	mem0Ready                bool
+	mem0ReadyCheckedAt       time.Time
+	mem0ReadyCheckTTL        time.Duration
 	compressMessageThreshold int
 	compressCharThreshold    int
 	compressScanLimit        int
@@ -74,6 +81,8 @@ func NewService(store *db.Store, cfg ServiceConfig, logger *slog.Logger) (*Servi
 		store:                    store,
 		llmProvider:              cfg.LLMProvider,
 		llmModel:                 cfg.LLMModel,
+		mem0Client:               cfg.Mem0Client,
+		mem0ReadyCheckTTL:        5 * time.Second,
 		compressMessageThreshold: cfg.CompressMessageThreshold,
 		compressCharThreshold:    cfg.CompressCharThreshold,
 		compressScanLimit:        cfg.CompressScanLimit,
@@ -106,6 +115,38 @@ func (s *Service) RecentMessages(ctx context.Context, sessionID string, limit in
 
 func (s *Service) GetSessionSummary(ctx context.Context, sessionID string) (string, error) {
 	return s.store.GetSessionSummary(ctx, sessionID)
+}
+
+func (s *Service) RecallFromMem0(ctx context.Context, query string, filter ExternalMemoryFilter, topK int) ([]string, error) {
+	if s.mem0Client == nil {
+		return nil, fmt.Errorf("mem0 recall is not configured")
+	}
+	return s.mem0Client.Search(ctx, query, filter, topK)
+}
+
+func (s *Service) IsMem0RecallReady(ctx context.Context) bool {
+	if s.mem0Client == nil {
+		return false
+	}
+	now := time.Now()
+
+	s.mem0ReadyMu.Lock()
+	if !s.mem0ReadyCheckedAt.IsZero() && now.Sub(s.mem0ReadyCheckedAt) < s.mem0ReadyCheckTTL {
+		ready := s.mem0Ready
+		s.mem0ReadyMu.Unlock()
+		return ready
+	}
+	s.mem0ReadyMu.Unlock()
+
+	checkCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	defer cancel()
+	ready := s.mem0Client.IsReady(checkCtx)
+
+	s.mem0ReadyMu.Lock()
+	s.mem0Ready = ready
+	s.mem0ReadyCheckedAt = now
+	s.mem0ReadyMu.Unlock()
+	return ready
 }
 
 func (s *Service) BuildContext(ctx context.Context, soulID, sessionID, latestUserText, observationDigest string) (string, string, error) {

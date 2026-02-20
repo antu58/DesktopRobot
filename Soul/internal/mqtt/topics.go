@@ -37,3 +37,7 @@ func TopicOnline(prefix, terminalID string) string {
 func TopicHeartbeat(prefix, terminalID string) string {
 	return fmt.Sprintf("%s/terminal/%s/heartbeat", prefix, terminalID)
 }
+
+func TopicStatus(prefix, terminalID string) string {
+	return fmt.Sprintf("%s/terminal/%s/status", prefix, terminalID)
+}

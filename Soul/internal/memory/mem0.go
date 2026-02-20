@@ -73,14 +73,22 @@ func (m *Mem0Client) Search(ctx context.Context, query string, filter ExternalMe
 	}
 
 	payload := map[string]any{
-		"query":    query,
-		"top_k":    topK,
-		"user_id":  filter.UserID,
-		"agent_id": filter.SoulID,
-		"run_id":   filter.SessionID,
-		"filters": map[string]any{
+		"query": query,
+		"top_k": topK,
+	}
+	if filter.UserID != "" {
+		payload["user_id"] = filter.UserID
+	}
+	if filter.SoulID != "" {
+		payload["agent_id"] = filter.SoulID
+	}
+	if filter.SessionID != "" {
+		payload["run_id"] = filter.SessionID
+	}
+	if filter.TerminalID != "" {
+		payload["filters"] = map[string]any{
 			"terminal_id": filter.TerminalID,
-		},
+		}
 	}
 
 	var out map[string]any
@@ -124,6 +132,19 @@ func (m *Mem0Client) postJSON(ctx context.Context, path string, payload any, out
 		return err
 	}
 	return nil
+}
+
+func (m *Mem0Client) IsReady(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.baseURL+"/docs", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 func extractMem0Results(out map[string]any) []string {
