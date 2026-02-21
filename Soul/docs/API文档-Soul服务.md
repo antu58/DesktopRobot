@@ -118,6 +118,10 @@
 - `active_session_id`：当前活动会话 ID。
 - `sessions`：已出现的会话 ID 列表。
 - `conversation_turns`：当前活动会话的轮次消息（user/assistant）。
+- `expression`：机器人当前表情（`微笑`/`大笑`/`生气`/`哭`/`不开心`）。
+- `head_pose`：机器人头部朝向（`中位`/`抬头`/`低头`/`左看`/`右看`）。
+- `head_motion`：当前进行中的头部动态动作（`点头`/`摇头`；无则空）。
+- `head_motion_duration_seconds`：当前头部动态动作持续时长（秒）。
 
 ## 4.3 `POST /session/new`
 
@@ -136,6 +140,13 @@
 
 用途：手工触发重新上报技能快照。  
 请求体：无。
+
+当前终端默认上报 4 个技能：
+
+- `light_red`：亮红灯（否定/错误判断）。
+- `light_green`：亮绿灯（肯定/正确判断）。
+- `set_expression`：设置表情，参数 `emotion` 枚举：`微笑`/`大笑`/`生气`/`哭`/`不开心`。
+- `set_head_motion`：头部动作，参数 `action` 枚举：`抬头`/`低头`/`左看`/`右看`/`点头`/`摇头`；`duration_seconds` 为可选持续时间（0.2~10，主要用于点头/摇头）。
 
 ## 4.5 `POST /ask`
 
