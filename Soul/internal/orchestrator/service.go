@@ -107,7 +107,7 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		return domain.ChatResponse{}, err
 	}
 
-	memoryContext, currentSummary, err := s.memoryService.BuildContext(ctx, soulID, req.SessionID, latestUserText, observationDigest)
+	memoryContext, currentSummary, err := s.memoryService.BuildContext(ctx, soulID, req.SessionID, observationDigest)
 	if err != nil {
 		return domain.ChatResponse{}, err
 	}
@@ -133,7 +133,7 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		})
 	}
 
-	systemPrompt := buildSystemPrompt(memoryContext, terminalSkills)
+	systemPrompt := buildSystemPrompt(memoryContext, terminalSkills, mem0Ready)
 	llmReq := domain.LLMRequest{
 		Model:    s.llmModel,
 		System:   systemPrompt,
@@ -305,32 +305,26 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 	}, nil
 }
 
-func buildSystemPrompt(memoryContext string, skills []domain.SkillDefinition) string {
+func buildSystemPrompt(memoryContext string, skills []domain.SkillDefinition, recallEnabled bool) string {
 	var sb strings.Builder
-	sb.WriteString("你是单用户设备助手。必须严格基于终端注入技能执行动作。\n")
+	sb.WriteString("你是单用户桌面机器人编排助手。你只能使用本轮请求提供的 tools 执行动作，不要假设任何未提供工具。\n\n")
+	sb.WriteString("上下文信息：\n")
 	sb.WriteString(memoryContext)
-	sb.WriteString("\n")
-
-	hasRed := false
-	hasGreen := false
-	for _, s := range skills {
-		if s.Name == "light_red" {
-			hasRed = true
-		}
-		if s.Name == "light_green" {
-			hasGreen = true
-		}
+	sb.WriteString("\n\n决策规则：\n")
+	sb.WriteString("1) 先理解用户意图，再查看可用 tools。\n")
+	sb.WriteString("2) 若多个 tools 与意图匹配，可在同一轮调用多个 tools（并行或顺序）。\n")
+	sb.WriteString("3) 若 tools 语义冲突（互斥动作），只调用最符合当前意图的一组。\n")
+	sb.WriteString("4) 若没有合适 tool，可直接文本回复。\n")
+	sb.WriteString("5) tool 参数必须严格符合对应 schema，不要编造字段。\n")
+	if recallEnabled {
+		sb.WriteString("6) 当前提供 recall_memory：仅在确实需要长期记忆时调用。调用后先回顾记忆，再选择终端技能。\n")
+	} else {
+		sb.WriteString("6) 当前未提供 recall_memory，不要假设可用。\n")
 	}
-
-	if hasRed && hasGreen {
-		sb.WriteString("当用户说法正确或你认同时，优先调用 light_green；当你不认同或判断不正确时，调用 light_red。每轮最多调用一个灯技能。\n")
-	}
-	sb.WriteString("默认流程仅执行一次LLM：直接选择终端技能并结束。\n")
-	sb.WriteString("只有在确实需要历史记忆时才调用 recall_memory。\n")
-	sb.WriteString("若调用 recall_memory，第一阶段不要同时调用终端技能；待记忆结果返回后，在第二阶段再选择终端技能。\n")
+	sb.WriteString("7) 回复保持简洁中文。\n")
 
 	if len(skills) == 0 {
-		sb.WriteString("当前终端无可用技能，只能文本回复。\n")
+		sb.WriteString("当前终端无可用技能，可直接文本回复。\n")
 	}
 
 	return sb.String()

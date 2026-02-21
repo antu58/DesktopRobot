@@ -1,6 +1,6 @@
 # API 文档（Soul 服务）
 
-更新时间：2026-02-20  
+更新时间：2026-02-21  
 状态：`实施中（Phase 1）`
 
 ## 1. 文档定位
@@ -73,6 +73,7 @@
 技能调度规则（当前实现）：
 
 - 默认：单次 LLM，直接选择终端技能并执行。
+- 同一轮可调用多个终端技能（若模型返回多个非冲突 tool calls）。
 - 特殊：若首轮选择内置 `recall_memory`（Mem0 历史回顾），服务端先向终端发送 `status=mem0_searching`，查询后进行第二次 LLM，再执行终端技能。
 - `recall_memory` 仅在 Mem0 就绪时暴露给模型；Mem0 未就绪时不会触发该分支。
 - `executed_skills` 可能包含 `recall_memory`。
@@ -110,14 +111,33 @@
 
 ## 4.2 `GET /state`
 
-用途：查看调试终端状态（灯色、最后动作、日志）。
+用途：查看调试终端状态（灯色、最后动作、日志、当前会话、多轮对话片段）。
 
-## 4.3 `POST /report-skills`
+新增字段（调试态）：
+
+- `active_session_id`：当前活动会话 ID。
+- `sessions`：已出现的会话 ID 列表。
+- `conversation_turns`：当前活动会话的轮次消息（user/assistant）。
+
+## 4.3 `POST /session/new`
+
+用途：创建并切换到新会话（便于多轮联调）。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "session_id": "s-1771650269287667421"
+}
+```
+
+## 4.4 `POST /report-skills`
 
 用途：手工触发重新上报技能快照。  
 请求体：无。
 
-## 4.4 `POST /ask`
+## 4.5 `POST /ask`
 
 用途：调试页入口，内部转发到 `soul-server /v1/chat`。
 
@@ -136,11 +156,18 @@
 }
 ```
 
-## 4.5 `GET /`
+说明：
+
+- `session_id` 可选；为空时使用当前活动会话。
+- `terminal-web` 会自动补齐 `inputs[].input_id` 和 `inputs[].ts`（如调用方未提供）。
+- 每轮发送前会重置灯态为 `off`，若本轮返回未包含亮灯技能，则保持不亮灯。
+
+## 4.6 `GET /`
 
 用途：调试页面。
 
 ## 5. 关联文档
 
 - Soul 设计目标：`设计目标.md`
+- LLM 请求规范：`LLM请求规范.md`
 - 全局通信协议：`../../doc/通信协议-v2.md`

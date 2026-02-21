@@ -53,7 +53,7 @@ build_tools_json() {
           type: "function",
           function: {
             name: "light_green",
-            description: "认可时点亮绿灯",
+            description: "用途：表达肯定、认同、积极反馈。效果：终端亮绿灯。约束：可与非冲突动作同轮调用；若场景无需动作可不调用。",
             parameters: {type: "object", properties: {}, required: []}
           }
         },
@@ -61,7 +61,7 @@ build_tools_json() {
           type: "function",
           function: {
             name: "light_red",
-            description: "不认可时点亮红灯",
+            description: "用途：表达否定、不认同、风险提醒。效果：终端亮红灯。约束：可与非冲突动作同轮调用；若场景无需动作可不调用。",
             parameters: {type: "object", properties: {}, required: []}
           }
         }
@@ -74,7 +74,7 @@ build_tools_json() {
             type: "function",
             function: {
               name: "light_green",
-              description: "认可时点亮绿灯",
+              description: "用途：表达肯定、认同、积极反馈。效果：终端亮绿灯。约束：可与非冲突动作同轮调用；若场景无需动作可不调用。",
               parameters: {type: "object", properties: {}, required: []}
             }
           },
@@ -82,7 +82,7 @@ build_tools_json() {
             type: "function",
             function: {
               name: "light_red",
-              description: "不认可时点亮红灯",
+              description: "用途：表达否定、不认同、风险提醒。效果：终端亮红灯。约束：可与非冲突动作同轮调用；若场景无需动作可不调用。",
               parameters: {type: "object", properties: {}, required: []}
             }
           }
@@ -91,7 +91,7 @@ build_tools_json() {
             type: "function",
             function: {
               name: ("dummy_skill_" + (.|tostring)),
-              description: "dummy skill for benchmark",
+              description: "用途：用于压测工具选择开销的占位技能。效果：无实际设备动作。约束：仅用于基准测试，不代表业务语义。",
               parameters: {
                 type: "object",
                 properties: {

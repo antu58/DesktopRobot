@@ -28,6 +28,7 @@
 - `Soul/docs/设计目标.md`
 - `Soul/docs/技术调研.md`
 - `Soul/docs/API文档-Soul服务.md`
+- `Soul/docs/LLM请求规范.md`
 
 ### Body（仅维护 2 份核心文档）
 

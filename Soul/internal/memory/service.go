@@ -149,7 +149,7 @@ func (s *Service) IsMem0RecallReady(ctx context.Context) bool {
 	return ready
 }
 
-func (s *Service) BuildContext(ctx context.Context, soulID, sessionID, latestUserText, observationDigest string) (string, string, error) {
+func (s *Service) BuildContext(ctx context.Context, soulID, sessionID, observationDigest string) (string, string, error) {
 	profile, err := s.store.LoadSoulProfilePrompt(ctx, soulID)
 	if err != nil {
 		return "", "", err
@@ -171,10 +171,6 @@ func (s *Service) BuildContext(ctx context.Context, soulID, sessionID, latestUse
 	if strings.TrimSpace(observationDigest) != "" {
 		sb.WriteString("\n本轮观测文字化:\n")
 		sb.WriteString(strings.TrimSpace(observationDigest))
-	}
-	if strings.TrimSpace(latestUserText) != "" {
-		sb.WriteString("\n最新用户输入:\n")
-		sb.WriteString(strings.TrimSpace(latestUserText))
 	}
 	return sb.String(), summary, nil
 }
