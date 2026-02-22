@@ -145,6 +145,19 @@ services:
     volumes:
       - ${EMOTION_MODEL_CACHE_DIR:-./.cache/huggingface}:/models
 
+  intent-filter:
+    build:
+      context: ./intent-filter-py
+      dockerfile: Dockerfile
+    container_name: intent-filter
+    env_file:
+      - .env
+    environment:
+      INTENT_FILTER_DEFAULT_LOCALE: ${INTENT_FILTER_DEFAULT_LOCALE:-zh-CN}
+      INTENT_FILTER_DEFAULT_TIMEZONE: ${INTENT_FILTER_DEFAULT_TIMEZONE:-Asia/Shanghai}
+    ports:
+      - "${INTENT_FILTER_HTTP_PORT:-9013}:9013"
+
 volumes:
   postgres-data:
   mem0-postgres-data:

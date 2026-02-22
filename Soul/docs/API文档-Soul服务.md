@@ -13,6 +13,7 @@
 - `soul-server`：`http://localhost:9010`
 - `terminal-web`：`http://localhost:9011`
 - `emotion-server`：`http://localhost:9012`
+- `intent-filter`：`http://localhost:9013`
 
 ## 3. `soul-server`
 
@@ -267,7 +268,100 @@
 }
 ```
 
-## 6. 关联文档
+## 6. `intent-filter`（意图筛选子服务）
+
+> 设计目标：由主服务注入“支持的意图表 + 命令文本”，返回统一的多意图结果，不参与技能调用。
+
+## 6.1 `GET /healthz`
+
+用途：检查 intent-filter 服务状态。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "engine": "mvp-rule-filter",
+  "version": "0.4.0"
+}
+```
+
+## 6.2 `POST /v1/intents/filter`
+
+用途：意图筛选（支持一句多意图）。
+
+请求体（关键字段）：
+
+```json
+{
+  "request_id": "optional",
+  "command": "帮我关闭窗帘并且定一个30分钟的闹钟我要休息一会",
+  "intent_catalog": [
+    {
+      "id": "curtain_control",
+      "name": "窗帘控制",
+      "match": {"keywords_any": ["窗帘", "关闭"]},
+      "slots": [
+        {"name": "target", "required": true, "from_entity_types": ["device"]},
+        {"name": "action", "required": true, "from_entity_types": ["action"]}
+      ]
+    }
+  ],
+  "options": {
+    "allow_multi_intent": true,
+    "max_intents_per_segment": 1,
+    "min_confidence": 0.35,
+    "return_debug_entities": true,
+    "emit_system_intent_when_empty": true
+  }
+}
+```
+
+响应体（关键字段）：
+
+```json
+{
+  "request_id": "ifr_xxx",
+  "decision": {
+    "action": "execute_intents",
+    "trigger_intent_id": "curtain_control",
+    "reason": "matched_catalog_intents"
+  },
+  "intents": [
+    {
+      "intent_id": "curtain_control",
+      "intent_name": "窗帘控制",
+      "confidence": 0.91,
+      "status": "ready",
+      "segment_index": 0,
+      "span": {"text": "帮我关闭窗帘", "start": 0, "end": 6},
+      "parameters": {"target": "curtain", "action": "close"},
+      "normalized": {},
+      "missing_parameters": [],
+      "evidence": [{"type": "keyword_any", "value": "窗帘", "score": 1.0}]
+    }
+  ],
+  "meta": {
+    "latency_ms": 6.21,
+    "segment_count": 2,
+    "catalog_size": 2,
+    "time_signals": 1
+  }
+}
+```
+
+说明：
+
+- 服务仅负责意图筛选与参数结构化，不负责技能路由和执行。
+- 时间解析当前为算法策略（相对时间 + 常见绝对时间）。
+- 服务内会自动推算 `timezone/now`，并自动抽取基础实体（action/device/room）。
+- 服务支持自动识别语言：`zh-CN` / `zh-TW` / `en-US` / `ko-KR` / `ja-JP`。
+- 当 `options.return_debug_entities=true` 时，会在 `meta.extracted_entities` 返回服务内部抽取到的实体。
+- 当未命中业务意图时，服务会返回系统意图（默认开启）：
+  - `sys.fallback_reasoning`：主服务应触发高级模型思考。
+  - `sys.no_action`：主服务应忽略执行动作（可仅做记录/情绪回应）。
+
+## 7. 关联文档
 
 - Soul 设计目标：`设计目标.md`
 - LLM 请求规范：`LLM请求规范.md`

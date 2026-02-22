@@ -5,12 +5,14 @@
 - `soul-server`：主服务（会话编排、LLM 调用、技能调度、摘要压缩）
 - `terminal-web`：调试终端（模拟 skills 上报与执行）
 - `emotion-server`：情感理解子服务（Python + mDeBERTa-XNLI + ONNX Runtime int8，PAD 三轴直推；输出主情绪 + PAD）
+- `intent-filter`：意图筛选子服务（Python，输入意图表 + 命令上下文，输出多意图数组与固定参数结构）
 
 ## 端口（本地默认）
 
 - `soul-server`：`9010`
 - `terminal-web`：`9011`
 - `emotion-server`：`9012`
+- `intent-filter`：`9013`
 - `mem0`：`18000`
 
 ## 启动
@@ -41,6 +43,24 @@ PAD 对照表：
 
 ```bash
 curl -sS http://127.0.0.1:9012/v1/emotion/pad-table | jq
+```
+
+如果只本地跑意图筛选子服务（不走 compose）：
+
+```bash
+cd /Users/zhangfeng/Desktop/Linux/DesktopRobot/Soul/intent-filter-py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 9013
+```
+
+验证：
+
+```bash
+curl -sS -X POST http://127.0.0.1:9013/v1/intents/filter \
+  -H 'content-type: application/json' \
+  -d '{"command":"帮我关灯并且提醒我10分钟后取快递","intent_catalog":[{"id":"light_off","match":{"keywords_any":["关灯"]}},{"id":"reminder_create","match":{"keywords_any":["提醒"]}}]}' | jq
 ```
 
 说明：
