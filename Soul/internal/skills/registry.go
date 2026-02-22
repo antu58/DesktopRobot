@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -8,12 +9,14 @@ import (
 )
 
 type TerminalSkillState struct {
-	TerminalID   string
-	SoulID       string
-	SkillVersion int64
-	Skills       []domain.SkillDefinition
-	Online       bool
-	LastUpdated  time.Time
+	TerminalID     string
+	SoulID         string
+	SkillVersion   int64
+	Skills         []domain.SkillDefinition
+	CatalogVersion int64
+	IntentCatalog  []domain.IntentSpec
+	Online         bool
+	LastUpdated    time.Time
 }
 
 type Registry struct {
@@ -49,12 +52,41 @@ func (r *Registry) SetSkills(terminalID, soulID string, skillVersion int64, skil
 	}
 
 	r.data[terminalID] = TerminalSkillState{
-		TerminalID:   terminalID,
-		SoulID:       soulID,
-		SkillVersion: skillVersion,
-		Skills:       skills,
-		Online:       true,
-		LastUpdated:  time.Now(),
+		TerminalID:     terminalID,
+		SoulID:         soulID,
+		SkillVersion:   skillVersion,
+		Skills:         skills,
+		CatalogVersion: current.CatalogVersion,
+		IntentCatalog:  append([]domain.IntentSpec{}, current.IntentCatalog...),
+		Online:         true,
+		LastUpdated:    time.Now(),
+	}
+}
+
+func (r *Registry) SetIntentCatalog(terminalID, soulID string, catalogVersion int64, catalog []domain.IntentSpec) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current := r.data[terminalID]
+	if current.CatalogVersion > 0 && catalogVersion > 0 && catalogVersion < current.CatalogVersion {
+		return
+	}
+	if current.CatalogVersion > 0 && catalogVersion == 0 {
+		return
+	}
+	if catalogVersion == 0 {
+		catalogVersion = current.CatalogVersion
+	}
+
+	r.data[terminalID] = TerminalSkillState{
+		TerminalID:     terminalID,
+		SoulID:         soulID,
+		SkillVersion:   current.SkillVersion,
+		Skills:         append([]domain.SkillDefinition{}, current.Skills...),
+		CatalogVersion: catalogVersion,
+		IntentCatalog:  append([]domain.IntentSpec{}, catalog...),
+		Online:         true,
+		LastUpdated:    time.Now(),
 	}
 }
 
@@ -89,6 +121,8 @@ func (r *Registry) GetState(terminalID string) (TerminalSkillState, bool) {
 	out := state
 	out.Skills = make([]domain.SkillDefinition, len(state.Skills))
 	copy(out.Skills, state.Skills)
+	out.IntentCatalog = make([]domain.IntentSpec, len(state.IntentCatalog))
+	copy(out.IntentCatalog, state.IntentCatalog)
 	return out, true
 }
 
@@ -103,6 +137,39 @@ func (r *Registry) GetSkills(terminalID string) []domain.SkillDefinition {
 
 	out := make([]domain.SkillDefinition, len(state.Skills))
 	copy(out, state.Skills)
+	return out
+}
+
+func (r *Registry) GetIntentCatalog(terminalID string) []domain.IntentSpec {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	state, ok := r.data[terminalID]
+	if !ok || !state.Online || r.isExpired(state) {
+		return nil
+	}
+	out := make([]domain.IntentSpec, len(state.IntentCatalog))
+	copy(out, state.IntentCatalog)
+	return out
+}
+
+func (r *Registry) ListOnlineStates() []TerminalSkillState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]TerminalSkillState, 0, len(r.data))
+	for _, state := range r.data {
+		if strings.TrimSpace(state.TerminalID) == "" {
+			continue
+		}
+		if !state.Online || r.isExpired(state) {
+			continue
+		}
+		item := state
+		item.Skills = append([]domain.SkillDefinition{}, state.Skills...)
+		item.IntentCatalog = append([]domain.IntentSpec{}, state.IntentCatalog...)
+		out = append(out, item)
+	}
 	return out
 }
 

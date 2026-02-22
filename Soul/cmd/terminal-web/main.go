@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +42,11 @@ type terminalState struct {
 	headMotion      string
 	headMotionUntil time.Time
 	headMotionDur   time.Duration
+	emotionP        float64
+	emotionA        float64
+	emotionD        float64
+	execMode        string
+	execProbability float64
 	lastAction      string
 	updatedAt       time.Time
 	logs            []string
@@ -51,7 +57,101 @@ type terminalState struct {
 var (
 	expressionOptions = []string{"微笑", "大笑", "生气", "哭", "不开心"}
 	headActionOptions = []string{"抬头", "低头", "左看", "右看", "点头", "摇头"}
+	lightModeOptions  = []string{"on", "off", "set_color"}
+	lightColorOptions = []string{"white", "red", "green"}
+	emotion15Options  = []string{
+		"anger", "anxiety", "boredom", "calm", "disappointment",
+		"disgust", "excitement", "fear", "frustration", "gratitude",
+		"joy", "neutral", "relief", "sadness", "surprise",
+	}
 )
+
+type quickIntentPreset struct {
+	ID          string                  `json:"id"`
+	Label       string                  `json:"label"`
+	Description string                  `json:"description,omitempty"`
+	Intent      domain.IntentActionItem `json:"intent"`
+}
+
+var quickIntentPresets = []quickIntentPreset{
+	{
+		ID:          "qk_light_on",
+		Label:       "开灯",
+		Description: "快速测试 intent_action -> control_light(mode=on)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_light_control",
+			IntentName: "控制灯光",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "control_light", "mode": "on", "color": "white"},
+		},
+	},
+	{
+		ID:          "qk_light_off",
+		Label:       "关灯",
+		Description: "快速测试 intent_action -> control_light(mode=off)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_light_control",
+			IntentName: "控制灯光",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "control_light", "mode": "off"},
+		},
+	},
+	{
+		ID:          "qk_light_red",
+		Label:       "灯变红色",
+		Description: "快速测试 intent_action -> control_light(mode=set_color,color=red)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_light_control",
+			IntentName: "控制灯光",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "control_light", "mode": "set_color", "color": "red"},
+		},
+	},
+	{
+		ID:          "qk_light_green",
+		Label:       "灯变绿色",
+		Description: "快速测试 intent_action -> control_light(mode=set_color,color=green)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_light_control",
+			IntentName: "控制灯光",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "control_light", "mode": "set_color", "color": "green"},
+		},
+	},
+	{
+		ID:          "qk_alarm_10m",
+		Label:       "订闹钟(+10分钟)",
+		Description: "快速测试 intent_action -> create_alarm(trigger_in_seconds=600)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_alarm_create",
+			IntentName: "订闹钟",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "create_alarm", "trigger_in_seconds": 600, "label": "测试闹钟"},
+		},
+	},
+	{
+		ID:          "qk_nod",
+		Label:       "动作-点头",
+		Description: "快速测试 intent_action -> set_head_motion(点头)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_head_motion",
+			IntentName: "头部动作",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "set_head_motion", "action": "点头", "duration_seconds": 1.2},
+		},
+	},
+	{
+		ID:          "qk_shake",
+		Label:       "动作-摇头(2秒)",
+		Description: "快速测试 intent_action -> set_head_motion(摇头,2s)",
+		Intent: domain.IntentActionItem{
+			IntentID:   "intent_head_motion",
+			IntentName: "头部动作",
+			Confidence: 0.99,
+			Normalized: map[string]any{"skill": "set_head_motion", "action": "摇头", "duration_seconds": 2.0},
+		},
+	},
+}
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -61,6 +161,8 @@ func main() {
 		color:           "off",
 		expression:      "微笑",
 		headPose:        "中位",
+		execMode:        "auto_execute",
+		execProbability: 1,
 		activeSessionID: "s1",
 		conversations:   make(map[string][]chatTurn),
 	}
@@ -80,7 +182,7 @@ func main() {
 	})
 
 	r.Get("/state", func(w http.ResponseWriter, _ *http.Request) {
-		activeSessionID, turns, sessions, color, expression, headPose, headMotion, headMotionDurationSeconds, lastAction, updatedAt, logs := state.snapshot()
+		activeSessionID, turns, sessions, color, expression, headPose, headMotion, headMotionDurationSeconds, emotionP, emotionA, emotionD, execMode, execProbability, lastAction, updatedAt, logs := state.snapshot()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"terminal_id":                  cfg.TerminalID,
 			"soul_hint":                    cfg.SoulHint,
@@ -93,6 +195,11 @@ func main() {
 			"head_pose":                    headPose,
 			"head_motion":                  headMotion,
 			"head_motion_duration_seconds": headMotionDurationSeconds,
+			"emotion_p":                    emotionP,
+			"emotion_a":                    emotionA,
+			"emotion_d":                    emotionD,
+			"exec_mode":                    execMode,
+			"exec_probability":             execProbability,
 			"last_action":                  lastAction,
 			"updated_at":                   updatedAt,
 			"logs":                         logs,
@@ -112,7 +219,86 @@ func main() {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if err := publishIntentCatalog(mqttClient, cfg); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	r.Get("/quick-intents", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": quickIntentPresets,
+		})
+	})
+	r.Post("/quick-intent", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			IntentID  string `json:"intent_id"`
+			SessionID string `json:"session_id"`
+			Transport string `json:"transport"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		preset, ok := findQuickIntentPreset(strings.TrimSpace(in.IntentID))
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown intent_id"})
+			return
+		}
+
+		sessionID := state.useOrCreateSession(strings.TrimSpace(in.SessionID))
+		soulID := strings.TrimSpace(cfg.SoulHint)
+		if soulID == "" {
+			soulID = "quick-intent-soul"
+		}
+		payload := domain.IntentActionPayload{
+			RequestID:       fmt.Sprintf("quick-%d", time.Now().UnixNano()),
+			SessionID:       sessionID,
+			TerminalID:      cfg.TerminalID,
+			SoulID:          soulID,
+			Intents:         []domain.IntentActionItem{cloneIntentActionItem(preset.Intent)},
+			ExecProbability: 0.99,
+			TS:              time.Now().UTC().Format(time.RFC3339Nano),
+		}
+
+		transport := strings.ToLower(strings.TrimSpace(in.Transport))
+		if transport == "" {
+			transport = "mqtt"
+		}
+		if transport == "local" {
+			processIntentActionPayload(state, payload)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":        true,
+				"mode":      "local",
+				"intent_id": preset.ID,
+				"payload":   payload,
+			})
+			return
+		}
+
+		topic := mqtt.TopicIntentAction(cfg.MQTTTopicPrefix, cfg.TerminalID)
+		body, _ := json.Marshal(payload)
+		token := mqttClient.Publish(topic, 1, false, body)
+		token.Wait()
+		if err := token.Error(); err != nil {
+			processIntentActionPayload(state, payload)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":        true,
+				"mode":      "local_fallback",
+				"warning":   "mqtt publish failed, local fallback applied",
+				"error":     err.Error(),
+				"intent_id": preset.ID,
+				"payload":   payload,
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"mode":      "mqtt",
+			"intent_id": preset.ID,
+			"payload":   payload,
+		})
 	})
 
 	r.Post("/ask", func(w http.ResponseWriter, req *http.Request) {
@@ -131,7 +317,7 @@ func main() {
 		inputs := normalizeInputs(in.Inputs)
 		keyboardText := firstKeyboardText(inputs)
 		if strings.TrimSpace(keyboardText) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "currently only input.type=keyboard_text with non-empty text is supported"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "currently only input.type=keyboard_text|speech_text with non-empty text is supported"})
 			return
 		}
 		sessionID := state.useOrCreateSession(strings.TrimSpace(in.SessionID))
@@ -243,6 +429,9 @@ func startMQTT(ctx context.Context, cfg config.TerminalWebConfig, state *termina
 	if err := publishSkills(client, cfg); err != nil {
 		return nil, err
 	}
+	if err := publishIntentCatalog(client, cfg); err != nil {
+		return nil, err
+	}
 	heartbeatTopic := mqtt.TopicHeartbeat(cfg.MQTTTopicPrefix, cfg.TerminalID)
 	if token := client.Publish(heartbeatTopic, 0, false, []byte("1")); token.Wait() && token.Error() != nil {
 		return nil, token.Error()
@@ -296,6 +485,51 @@ func startMQTT(ctx context.Context, cfg config.TerminalWebConfig, state *termina
 		return nil, token.Error()
 	}
 
+	emotionTopic := mqtt.TopicEmotionUpdate(cfg.MQTTTopicPrefix, cfg.TerminalID)
+	if token := client.Subscribe(emotionTopic, 1, func(_ paho.Client, msg paho.Message) {
+		var payload domain.EmotionUpdatePayload
+		if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
+			state.appendLog(fmt.Sprintf("%s [emotion:raw] %s", time.Now().Format(time.RFC3339), strings.TrimSpace(string(msg.Payload()))))
+			return
+		}
+		now := time.Now()
+		reaction := deriveEmotionReaction(payload.UserEmotion.Emotion, payload.UserEmotion.Intensity)
+		state.mu.Lock()
+		state.emotionP = payload.SoulEmotion.P
+		state.emotionA = payload.SoulEmotion.A
+		state.emotionD = payload.SoulEmotion.D
+		state.execMode = payload.ExecMode
+		state.execProbability = payload.ExecProbability
+		state.expression = reaction.Expression
+		if reaction.HeadAction != "" {
+			state.applyHeadActionLocked(reaction.HeadAction, reaction.Duration, now)
+		}
+		if reaction.HeadAction != "" {
+			state.lastAction = fmt.Sprintf("情绪响应: %s -> %s + %s", reaction.Emotion, reaction.Expression, reaction.HeadAction)
+		} else {
+			state.lastAction = fmt.Sprintf("情绪响应: %s -> %s", reaction.Emotion, reaction.Expression)
+		}
+		state.updatedAt = now
+		state.appendLogLocked(fmt.Sprintf("%s [emotion][session:%s] user=%s(%.2f) soul_pad=(%.2f,%.2f,%.2f) -> expr=%s motion=%s(%.1fs) mode=%s prob=%.3f",
+			now.Format(time.RFC3339), payload.SessionID, payload.UserEmotion.Emotion, payload.UserEmotion.Intensity, payload.SoulEmotion.P, payload.SoulEmotion.A, payload.SoulEmotion.D,
+			reaction.Expression, defaultString(reaction.HeadAction, "-"), reaction.Duration.Seconds(), payload.ExecMode, payload.ExecProbability))
+		state.mu.Unlock()
+	}); token.Wait() && token.Error() != nil {
+		return nil, token.Error()
+	}
+
+	intentActionTopic := mqtt.TopicIntentAction(cfg.MQTTTopicPrefix, cfg.TerminalID)
+	if token := client.Subscribe(intentActionTopic, 1, func(_ paho.Client, msg paho.Message) {
+		var payload domain.IntentActionPayload
+		if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
+			state.appendLog(fmt.Sprintf("%s [intent_action:raw] %s", time.Now().Format(time.RFC3339), strings.TrimSpace(string(msg.Payload()))))
+			return
+		}
+		processIntentActionPayload(state, payload)
+	}); token.Wait() && token.Error() != nil {
+		return nil, token.Error()
+	}
+
 	go func() {
 		heartbeatTicker := time.NewTicker(cfg.HeartbeatInterval)
 		defer heartbeatTicker.Stop()
@@ -324,29 +558,94 @@ func publishSkills(client paho.Client, cfg config.TerminalWebConfig) error {
 		SkillVersion: cfg.SkillVersion,
 		Skills: []domain.SkillDefinition{
 			{
-				Name:        "light_red",
-				Description: "用途：当需要表达否定、不认同或判定信息错误时调用。效果：亮红灯。约束：与 light_green 互斥；若本轮不涉及对错判断，不调用。",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{},"required":[]}`),
+				Name:        "control_light",
+				Description: "技能：控制灯。用途：开灯、关灯、设置颜色（红/绿）。参数 mode=on/off/set_color；mode=set_color 时必须提供 color。",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"mode":{"type":"string","enum":["on","off","set_color"]},"color":{"type":"string","enum":["white","red","green"]}},"required":["mode"],"additionalProperties":false}`),
 			},
 			{
-				Name:        "light_green",
-				Description: "用途：当需要表达肯定、认同或判定信息正确时调用。效果：亮绿灯。约束：与 light_red 互斥；若本轮不涉及对错判断，不调用。",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{},"required":[]}`),
-			},
-			{
-				Name:        "set_expression",
-				Description: "技能：表情。用途：设置机器人面部状态。参数 emotion 可选值：微笑、大笑、生气、哭、不开心。",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"emotion":{"type":"string","enum":["微笑","大笑","生气","哭","不开心"]}},"required":["emotion"],"additionalProperties":false}`),
+				Name:        "create_alarm",
+				Description: "技能：订闹钟。参数 trigger_at(ISO8601) 或 trigger_in_seconds(相对秒) 二选一，label 可选。",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"trigger_at":{"type":"string","description":"ISO8601 timestamp"},"trigger_in_seconds":{"type":"number","minimum":1},"label":{"type":"string"}},"additionalProperties":false}`),
 			},
 			{
 				Name:        "set_head_motion",
-				Description: "技能：头部动作。参数 action 可选值：抬头、低头、左看、右看、点头、摇头；duration_seconds 为动作持续秒数（仅点头/摇头时建议提供，范围 0.2~10）。",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["抬头","低头","左看","右看","点头","摇头"]},"duration_seconds":{"type":"number","minimum":0.2,"maximum":10}},"required":["action"],"additionalProperties":false}`),
+				Description: "技能：头部动作。参数 action 可选值：点头、摇头；duration_seconds 为动作持续秒数（0.2~10，可选）。",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["点头","摇头"]},"duration_seconds":{"type":"number","minimum":0.2,"maximum":10}},"required":["action"],"additionalProperties":false}`),
+			},
+			{
+				Name:        "set_reminder",
+				Description: "技能：设置提醒事项。参数 content 必填，due_at 可选。",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"content":{"type":"string","minLength":1},"due_at":{"type":"string","description":"ISO8601 timestamp"}},"required":["content"],"additionalProperties":false}`),
+			},
+			{
+				Name:        "send_email",
+				Description: "技能：发邮件（模拟）。参数 to/subject/body 全部必填。",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"to":{"type":"string","minLength":3},"subject":{"type":"string","minLength":1},"body":{"type":"string","minLength":1}},"required":["to","subject","body"],"additionalProperties":false}`),
 			},
 		},
 	}
 	buf, _ := json.Marshal(report)
 	topic := mqtt.TopicSkills(cfg.MQTTTopicPrefix, cfg.TerminalID)
+	if token := client.Publish(topic, 1, true, buf); token.Wait() && token.Error() != nil {
+		return token.Error()
+	}
+	return nil
+}
+
+func publishIntentCatalog(client paho.Client, cfg config.TerminalWebConfig) error {
+	report := domain.IntentCatalogReport{
+		TerminalID:     cfg.TerminalID,
+		CatalogVersion: cfg.SkillVersion,
+		IntentCatalog: []domain.IntentSpec{
+			{
+				ID:       "intent_light_control",
+				Name:     "控制灯",
+				Priority: 90,
+				Match: domain.IntentMatchRules{
+					KeywordsAny: []string{
+						"开灯", "打开灯", "把灯打开", "灯打开", "关灯", "关闭灯", "灯关了", "灯关",
+						"灯", "红色", "绿色", "白色", "灯白色", "变红", "变绿", "变白", "white", "light",
+					},
+					MinConfidence: 0.10,
+				},
+				Slots: []domain.IntentSlotBinding{
+					{Name: "skill", Default: "control_light"},
+					{Name: "mode", Regex: "(开灯|打开灯|把灯打开|灯打开|打开|开启|关灯|关闭灯|把灯关掉|灯关了|关了|关掉|关闭|变红|变红色|变绿|变绿色|变白|变白色|红灯|绿灯|白灯)", RegexGroup: 1},
+					{Name: "color", Regex: "(红色|红|绿色|绿|白色|白|白灯|灯白色)", RegexGroup: 1},
+				},
+			},
+			{
+				ID:       "intent_alarm_create",
+				Name:     "订闹钟",
+				Priority: 90,
+				Match: domain.IntentMatchRules{
+					KeywordsAny:   []string{"闹钟", "alarm", "叫我", "提醒我起床"},
+					MinConfidence: 0.10,
+				},
+				Slots: []domain.IntentSlotBinding{
+					{Name: "skill", Default: "create_alarm"},
+					{Name: "trigger_in_seconds", Regex: "([0-9]+(?:\\.[0-9]+)?)\\s*秒", RegexGroup: 1},
+					{Name: "label", Default: "闹钟"},
+				},
+			},
+			{
+				ID:       "intent_head_motion",
+				Name:     "头部动作",
+				Priority: 80,
+				Match: domain.IntentMatchRules{
+					KeywordsAny:   []string{"点头", "摇头"},
+					MinConfidence: 0.10,
+				},
+				Slots: []domain.IntentSlotBinding{
+					{Name: "skill", Default: "set_head_motion"},
+					{Name: "action", Required: true, Regex: "(点头|摇头)", RegexGroup: 1},
+					{Name: "duration_seconds", Regex: "([0-9]+(?:\\.[0-9]+)?)\\s*秒", RegexGroup: 1},
+				},
+			},
+		},
+	}
+	buf, _ := json.Marshal(report)
+	topic := mqtt.TopicIntentCatalog(cfg.MQTTTopicPrefix, cfg.TerminalID)
 	if token := client.Publish(topic, 1, true, buf); token.Wait() && token.Error() != nil {
 		return token.Error()
 	}
@@ -366,16 +665,77 @@ func handleSkill(req domain.InvokeRequest, state *terminalState) domain.InvokeRe
 	}
 
 	switch req.Skill {
+	case "control_light":
+		var args struct {
+			Mode  string `json:"mode"`
+			Color string `json:"color"`
+		}
+		if err := decodeSkillArgs(req.Arguments, &args); err != nil {
+			setError("control_light 参数错误: " + err.Error())
+			break
+		}
+		mode, color, err := normalizeLightRequest(args.Mode, args.Color)
+		if err != nil {
+			setError("control_light 参数错误: " + err.Error())
+			break
+		}
+		switch mode {
+		case "off":
+			state.color = "off"
+			state.lastAction = "灯控: 关灯"
+			result.Output = "灯已关闭"
+		case "on":
+			if color == "" || color == "off" {
+				color = "white"
+			}
+			state.color = color
+			state.lastAction = "灯控: 开灯(" + color + ")"
+			result.Output = "灯已打开，颜色: " + color
+		case "set_color":
+			state.color = color
+			state.lastAction = "灯控: 颜色 -> " + color
+			result.Output = "灯颜色已设置为 " + color
+		default:
+			setError("control_light 参数错误: mode 仅支持 " + strings.Join(lightModeOptions, "、"))
+		}
+		state.updatedAt = now
 	case "light_red":
 		state.color = "red"
-		state.lastAction = "亮红灯"
+		state.lastAction = "灯控(兼容): 亮红灯"
 		state.updatedAt = now
 		result.Output = "红灯已点亮"
 	case "light_green":
 		state.color = "green"
-		state.lastAction = "亮绿灯"
+		state.lastAction = "灯控(兼容): 亮绿灯"
 		state.updatedAt = now
 		result.Output = "绿灯已点亮"
+	case "create_alarm":
+		var args struct {
+			TriggerAt        string  `json:"trigger_at"`
+			TriggerInSeconds float64 `json:"trigger_in_seconds"`
+			Label            string  `json:"label"`
+		}
+		if err := decodeSkillArgs(req.Arguments, &args); err != nil {
+			setError("create_alarm 参数错误: " + err.Error())
+			break
+		}
+		alarmAt := strings.TrimSpace(args.TriggerAt)
+		alarmIn := args.TriggerInSeconds
+		label := strings.TrimSpace(args.Label)
+		if label == "" {
+			label = "闹钟"
+		}
+		if alarmAt == "" && alarmIn <= 0 {
+			setError("create_alarm 参数错误: trigger_at 与 trigger_in_seconds 至少提供一个")
+			break
+		}
+		when := alarmAt
+		if when == "" {
+			when = fmt.Sprintf("%.0f 秒后", alarmIn)
+		}
+		state.lastAction = fmt.Sprintf("闹钟(模拟): %s @ %s", label, when)
+		state.updatedAt = now
+		result.Output = fmt.Sprintf("已登记闹钟（模拟）：%s，触发时间=%s", label, when)
 	case "set_expression":
 		var args struct {
 			Emotion string `json:"emotion"`
@@ -421,12 +781,292 @@ func handleSkill(req domain.InvokeRequest, state *terminalState) domain.InvokeRe
 			state.lastAction = "头部动作: " + action
 			result.Output = "头部动作已执行：" + action
 		}
+	case "set_reminder":
+		var args struct {
+			Content string `json:"content"`
+			DueAt   string `json:"due_at"`
+		}
+		if err := decodeSkillArgs(req.Arguments, &args); err != nil {
+			setError("set_reminder 参数错误: " + err.Error())
+			break
+		}
+		content := strings.TrimSpace(args.Content)
+		if content == "" {
+			setError("set_reminder 参数错误: content 不能为空")
+			break
+		}
+		dueAt := strings.TrimSpace(args.DueAt)
+		when := "未指定"
+		if dueAt != "" {
+			when = dueAt
+		}
+		state.lastAction = fmt.Sprintf("提醒事项(模拟): %s @ %s", content, when)
+		state.updatedAt = now
+		result.Output = fmt.Sprintf("提醒事项已登记（模拟）：%s，时间=%s", content, when)
+	case "send_email":
+		var args struct {
+			To      string `json:"to"`
+			Subject string `json:"subject"`
+			Body    string `json:"body"`
+		}
+		if err := decodeSkillArgs(req.Arguments, &args); err != nil {
+			setError("send_email 参数错误: " + err.Error())
+			break
+		}
+		to := strings.TrimSpace(args.To)
+		subject := strings.TrimSpace(args.Subject)
+		body := strings.TrimSpace(args.Body)
+		if to == "" || subject == "" || body == "" {
+			setError("send_email 参数错误: to/subject/body 均不能为空")
+			break
+		}
+		state.lastAction = fmt.Sprintf("发邮件(模拟): to=%s subject=%s", to, subject)
+		state.updatedAt = now
+		result.Output = fmt.Sprintf("邮件已发送（模拟）：to=%s，subject=%s", to, subject)
+	case "express_emotion":
+		var args struct {
+			Emotion     string   `json:"emotion"`
+			Intensity   *float64 `json:"intensity"`
+			ApplyMotion *bool    `json:"apply_motion"`
+		}
+		if err := decodeSkillArgs(req.Arguments, &args); err != nil {
+			setError("express_emotion 参数错误: " + err.Error())
+			break
+		}
+		emotion, ok := normalizeEmotion15(args.Emotion)
+		if !ok {
+			setError("express_emotion 参数错误: emotion 仅支持 " + strings.Join(emotion15Options, "、"))
+			break
+		}
+		intensity := 0.62
+		if args.Intensity != nil {
+			intensity = clamp01(*args.Intensity)
+		}
+		reaction := deriveEmotionReaction(emotion, intensity)
+		applyMotion := true
+		if args.ApplyMotion != nil {
+			applyMotion = *args.ApplyMotion
+		}
+		state.expression = reaction.Expression
+		state.lastAction = fmt.Sprintf("情绪表达(模拟): %s -> %s", emotion, reaction.Expression)
+		if applyMotion && reaction.HeadAction != "" {
+			state.applyHeadActionLocked(reaction.HeadAction, reaction.Duration, now)
+			state.lastAction = fmt.Sprintf("情绪表达(模拟): %s -> %s + %s", emotion, reaction.Expression, reaction.HeadAction)
+		}
+		state.updatedAt = now
+		if applyMotion && reaction.HeadAction != "" {
+			result.Output = fmt.Sprintf("已执行情绪表达（模拟）：%s -> %s + %s %.1fs", emotion, reaction.Expression, reaction.HeadAction, reaction.Duration.Seconds())
+		} else {
+			result.Output = fmt.Sprintf("已执行情绪表达（模拟）：%s -> %s", emotion, reaction.Expression)
+		}
 	default:
 		setError("unknown skill: " + req.Skill)
 	}
 
 	state.appendLogLocked(fmt.Sprintf("%s skill=%s args=%s -> %s", now.Format(time.RFC3339), req.Skill, strings.TrimSpace(string(req.Arguments)), result.Output))
 	return result
+}
+
+func processIntentActionPayload(state *terminalState, payload domain.IntentActionPayload) {
+	state.appendLog(fmt.Sprintf("%s [intent_action][session:%s] intents=%d prob=%.3f", time.Now().Format(time.RFC3339), payload.SessionID, len(payload.Intents), payload.ExecProbability))
+	for _, item := range payload.Intents {
+		req, ok := buildInvokeFromIntent(item)
+		if !ok {
+			state.appendLog(fmt.Sprintf("%s [intent_action] skipped intent=%s missing skill mapping", time.Now().Format(time.RFC3339), item.IntentID))
+			continue
+		}
+		req.RequestID = payload.RequestID + "-" + strings.ReplaceAll(item.IntentID, " ", "_")
+		result := handleSkill(req, state)
+		state.appendLog(fmt.Sprintf("%s [intent_action] intent=%s -> skill=%s ok=%v output=%s", time.Now().Format(time.RFC3339), item.IntentID, req.Skill, result.OK, result.Output))
+	}
+}
+
+func buildInvokeFromIntent(item domain.IntentActionItem) (domain.InvokeRequest, bool) {
+	skill := firstNonEmptyString(readString(item.Normalized, "skill"), readString(item.Parameters, "skill"), inferSkillByIntentID(item.IntentID))
+	if skill == "" {
+		return domain.InvokeRequest{}, false
+	}
+
+	args := map[string]any{}
+	switch skill {
+	case "light_red", "light_green":
+		// no args
+	case "control_light":
+		mode := firstNonEmptyString(readString(item.Normalized, "mode"), readString(item.Parameters, "mode"), readString(item.Normalized, "action"), readString(item.Parameters, "action"))
+		color := firstNonEmptyString(readString(item.Normalized, "color"), readString(item.Parameters, "color"))
+		if mode == "" && color == "" {
+			return domain.InvokeRequest{}, false
+		}
+		if mode != "" {
+			args["mode"] = mode
+		}
+		if color != "" {
+			args["color"] = color
+		}
+	case "create_alarm":
+		if triggerAt := firstNonEmptyString(readString(item.Normalized, "trigger_at"), readString(item.Parameters, "trigger_at")); triggerAt != "" {
+			args["trigger_at"] = triggerAt
+		}
+		if secs, ok := readFloat(item.Normalized, "trigger_in_seconds"); ok {
+			args["trigger_in_seconds"] = secs
+		} else if secs, ok := readFloat(item.Parameters, "trigger_in_seconds"); ok {
+			args["trigger_in_seconds"] = secs
+		}
+		if label := firstNonEmptyString(readString(item.Normalized, "label"), readString(item.Parameters, "label")); label != "" {
+			args["label"] = label
+		}
+		if _, hasAt := args["trigger_at"]; !hasAt {
+			if _, hasIn := args["trigger_in_seconds"]; !hasIn {
+				return domain.InvokeRequest{}, false
+			}
+		}
+	case "set_expression":
+		emotion := firstNonEmptyString(readString(item.Normalized, "emotion"), readString(item.Parameters, "emotion"))
+		if emotion == "" {
+			return domain.InvokeRequest{}, false
+		}
+		args["emotion"] = emotion
+	case "express_emotion":
+		emotion := firstNonEmptyString(readString(item.Normalized, "emotion"), readString(item.Parameters, "emotion"))
+		if emotion == "" {
+			return domain.InvokeRequest{}, false
+		}
+		args["emotion"] = emotion
+		if intensity, ok := readFloat(item.Normalized, "intensity"); ok {
+			args["intensity"] = intensity
+		} else if intensity, ok := readFloat(item.Parameters, "intensity"); ok {
+			args["intensity"] = intensity
+		}
+	case "set_head_motion":
+		action := firstNonEmptyString(readString(item.Normalized, "action"), readString(item.Parameters, "action"))
+		if action == "" {
+			return domain.InvokeRequest{}, false
+		}
+		args["action"] = action
+		if dur, ok := readFloat(item.Normalized, "duration_seconds"); ok {
+			args["duration_seconds"] = dur
+		} else if dur, ok := readFloat(item.Parameters, "duration_seconds"); ok {
+			args["duration_seconds"] = dur
+		}
+	default:
+		for k, v := range item.Normalized {
+			args[k] = v
+		}
+		for k, v := range item.Parameters {
+			if _, ok := args[k]; !ok {
+				args[k] = v
+			}
+		}
+	}
+
+	raw, _ := json.Marshal(args)
+	return domain.InvokeRequest{
+		Skill:     skill,
+		Arguments: raw,
+	}, true
+}
+
+func inferSkillByIntentID(intentID string) string {
+	key := strings.ToLower(strings.TrimSpace(intentID))
+	switch key {
+	case "intent_light_control":
+		return "control_light"
+	case "intent_alarm_create":
+		return "create_alarm"
+	case "intent_head_motion":
+		return "set_head_motion"
+	case "intent_light_green":
+		return "light_green"
+	case "intent_light_red":
+		return "light_red"
+	case "intent_set_expression":
+		return "set_expression"
+	case "intent_set_head_motion":
+		return "set_head_motion"
+	default:
+		return ""
+	}
+}
+
+func findQuickIntentPreset(id string) (quickIntentPreset, bool) {
+	key := strings.TrimSpace(id)
+	for _, item := range quickIntentPresets {
+		if item.ID == key {
+			return item, true
+		}
+	}
+	return quickIntentPreset{}, false
+}
+
+func cloneIntentActionItem(item domain.IntentActionItem) domain.IntentActionItem {
+	out := item
+	out.Parameters = cloneAnyMap(item.Parameters)
+	out.Normalized = cloneAnyMap(item.Normalized)
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func readString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	raw, ok := m[key]
+	if !ok {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func readFloat(m map[string]any, key string) (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	raw, ok := m[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		num, err := v.Float64()
+		return num, err == nil
+	case string:
+		num, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return num, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func decodeSkillArgs(raw json.RawMessage, out any) error {
@@ -438,6 +1078,56 @@ func decodeSkillArgs(raw json.RawMessage, out any) error {
 		return fmt.Errorf("invalid json args: %w", err)
 	}
 	return nil
+}
+
+func normalizeLightRequest(modeRaw, colorRaw string) (string, string, error) {
+	mode := normalizeLightMode(modeRaw)
+	color, hasColor := normalizeLightColor(colorRaw)
+	if mode == "" {
+		if hasColor {
+			mode = "set_color"
+		} else {
+			return "", "", fmt.Errorf("mode 仅支持 %s", strings.Join(lightModeOptions, "、"))
+		}
+	}
+	if mode == "set_color" {
+		if !hasColor {
+			return "", "", fmt.Errorf("mode=set_color 时必须提供 color(%s)", strings.Join(lightColorOptions, "/"))
+		}
+	}
+	if mode == "on" && !hasColor {
+		color = "white"
+	}
+	return mode, color, nil
+}
+
+func normalizeLightMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "open", "开", "开灯", "打开", "打开灯", "把灯打开", "灯打开", "开启":
+		return "on"
+	case "off", "close", "关", "关灯", "关闭", "关闭灯", "把灯关掉", "关掉", "灯关了", "关了", "灯关":
+		return "off"
+	case "set_color", "color", "设置颜色", "变色", "变红", "变红色", "变绿", "变绿色", "变白", "变白色", "红灯", "绿灯", "白灯":
+		return "set_color"
+	default:
+		return ""
+	}
+}
+
+func normalizeLightColor(v string) (string, bool) {
+	key := strings.ToLower(strings.TrimSpace(v))
+	switch key {
+	case "":
+		return "", false
+	case "white", "白", "白色", "白灯", "灯白色":
+		return "white", true
+	case "red", "红", "红色":
+		return "red", true
+	case "green", "绿", "绿色":
+		return "green", true
+	default:
+		return "", false
+	}
 }
 
 func normalizeExpression(v string) (string, bool) {
@@ -455,6 +1145,120 @@ func normalizeExpression(v string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+type emotionReaction struct {
+	Emotion    string
+	Expression string
+	HeadAction string
+	Duration   time.Duration
+}
+
+func deriveEmotionReaction(emotionRaw string, intensityRaw float64) emotionReaction {
+	emotion, ok := normalizeEmotion15(emotionRaw)
+	if !ok {
+		emotion = "neutral"
+	}
+	intensity := clamp01(intensityRaw)
+	if intensity == 0 {
+		intensity = 0.5
+	}
+	makeDur := func(base, scale float64) time.Duration {
+		seconds := base + scale*intensity
+		if seconds < 0.2 {
+			seconds = 0.2
+		}
+		if seconds > 10 {
+			seconds = 10
+		}
+		return time.Duration(seconds * float64(time.Second))
+	}
+	switch emotion {
+	case "anger", "disgust", "frustration":
+		return emotionReaction{Emotion: emotion, Expression: "生气", HeadAction: "摇头", Duration: makeDur(1.0, 1.0)}
+	case "anxiety", "fear":
+		if intensity >= 0.45 {
+			return emotionReaction{Emotion: emotion, Expression: "不开心", HeadAction: "摇头", Duration: makeDur(0.8, 1.0)}
+		}
+		return emotionReaction{Emotion: emotion, Expression: "不开心"}
+	case "sadness", "disappointment":
+		if intensity >= 0.7 {
+			return emotionReaction{Emotion: emotion, Expression: "哭", HeadAction: "摇头", Duration: makeDur(1.0, 1.2)}
+		}
+		return emotionReaction{Emotion: emotion, Expression: "不开心"}
+	case "boredom":
+		return emotionReaction{Emotion: emotion, Expression: "不开心"}
+	case "excitement":
+		return emotionReaction{Emotion: emotion, Expression: "大笑", HeadAction: "点头", Duration: makeDur(0.8, 1.0)}
+	case "joy", "gratitude", "relief":
+		if intensity >= 0.5 {
+			return emotionReaction{Emotion: emotion, Expression: "微笑", HeadAction: "点头", Duration: makeDur(0.8, 0.8)}
+		}
+		return emotionReaction{Emotion: emotion, Expression: "微笑"}
+	case "surprise":
+		if intensity >= 0.55 {
+			return emotionReaction{Emotion: emotion, Expression: "大笑", HeadAction: "点头", Duration: makeDur(0.7, 0.8)}
+		}
+		return emotionReaction{Emotion: emotion, Expression: "微笑"}
+	case "calm", "neutral":
+		return emotionReaction{Emotion: emotion, Expression: "微笑"}
+	default:
+		return emotionReaction{Emotion: emotion, Expression: "微笑"}
+	}
+}
+
+func normalizeEmotion15(v string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "anger", "生气", "愤怒":
+		return "anger", true
+	case "anxiety", "焦虑":
+		return "anxiety", true
+	case "boredom", "无聊":
+		return "boredom", true
+	case "calm", "平静":
+		return "calm", true
+	case "disappointment", "失望":
+		return "disappointment", true
+	case "disgust", "厌恶":
+		return "disgust", true
+	case "excitement", "兴奋":
+		return "excitement", true
+	case "fear", "恐惧", "害怕":
+		return "fear", true
+	case "frustration", "挫败":
+		return "frustration", true
+	case "gratitude", "感激", "感谢":
+		return "gratitude", true
+	case "joy", "开心", "喜悦":
+		return "joy", true
+	case "neutral", "中性":
+		return "neutral", true
+	case "relief", "释然", "松一口气":
+		return "relief", true
+	case "sadness", "悲伤", "难过":
+		return "sadness", true
+	case "surprise", "惊讶":
+		return "surprise", true
+	default:
+		return "", false
+	}
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func defaultString(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(v)
 }
 
 func normalizeHeadAction(v string) (string, bool) {
@@ -500,7 +1304,7 @@ func (s *terminalState) applyHeadActionLocked(action string, duration time.Durat
 	}
 }
 
-func (s *terminalState) snapshot() (activeSessionID string, turns []chatTurn, sessions []string, color, expression, headPose, headMotion string, headMotionDurationSeconds float64, lastAction string, updatedAt time.Time, logs []string) {
+func (s *terminalState) snapshot() (activeSessionID string, turns []chatTurn, sessions []string, color, expression, headPose, headMotion string, headMotionDurationSeconds, emotionP, emotionA, emotionD float64, execMode string, execProbability float64, lastAction string, updatedAt time.Time, logs []string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -508,6 +1312,11 @@ func (s *terminalState) snapshot() (activeSessionID string, turns []chatTurn, se
 	color = s.color
 	expression = s.expression
 	headPose = s.headPose
+	emotionP = s.emotionP
+	emotionA = s.emotionA
+	emotionD = s.emotionD
+	execMode = s.execMode
+	execProbability = s.execProbability
 	if s.headMotion != "" && time.Now().Before(s.headMotionUntil) {
 		headMotion = s.headMotion
 		headMotionDurationSeconds = s.headMotionDur.Seconds()
@@ -564,10 +1373,6 @@ func (s *terminalState) beginRound(sessionID, userText string) {
 	defer s.mu.Unlock()
 
 	s.activeSessionID = sessionID
-	s.color = "off"
-	s.headMotion = ""
-	s.headMotionDur = 0
-	s.headMotionUntil = time.Time{}
 	s.lastAction = "本轮处理中"
 	s.updatedAt = time.Now()
 	s.appendTurnLocked(sessionID, chatTurn{
@@ -592,23 +1397,7 @@ func (s *terminalState) finishRound(sessionID, reply string, executedSkills []st
 		At:             time.Now(),
 	})
 
-	appliedLight := false
-	for _, skill := range executedSkills {
-		switch skill {
-		case "light_red":
-			s.color = "red"
-			appliedLight = true
-		case "light_green":
-			s.color = "green"
-			appliedLight = true
-		}
-	}
-	if !appliedLight {
-		s.color = "off"
-	}
-	if len(executedSkills) == 0 {
-		s.lastAction = "本轮未触发技能"
-	} else if strings.TrimSpace(s.lastAction) == "" || s.lastAction == "本轮处理中" {
+	if len(executedSkills) > 0 && (strings.TrimSpace(s.lastAction) == "" || s.lastAction == "本轮处理中") {
 		s.lastAction = "本轮已执行技能: " + strings.Join(executedSkills, ",")
 	}
 	s.updatedAt = time.Now()
@@ -643,7 +1432,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func firstKeyboardText(inputs []domain.ChatInput) string {
 	for _, in := range inputs {
-		if strings.EqualFold(strings.TrimSpace(in.Type), "keyboard_text") && strings.TrimSpace(in.Text) != "" {
+		tp := strings.ToLower(strings.TrimSpace(in.Type))
+		if (tp == "keyboard_text" || tp == "speech_text") && strings.TrimSpace(in.Text) != "" {
 			return strings.TrimSpace(in.Text)
 		}
 	}
@@ -661,8 +1451,13 @@ func normalizeInputs(inputs []domain.ChatInput) []domain.ChatInput {
 		if strings.TrimSpace(item.TS) == "" {
 			item.TS = baseTS.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano)
 		}
-		if strings.TrimSpace(item.Source) == "" && strings.EqualFold(strings.TrimSpace(item.Type), "keyboard_text") {
-			item.Source = "keyboard"
+		if strings.TrimSpace(item.Source) == "" {
+			switch strings.ToLower(strings.TrimSpace(item.Type)) {
+			case "keyboard_text":
+				item.Source = "keyboard"
+			case "speech_text":
+				item.Source = "speech"
+			}
 		}
 		out = append(out, item)
 	}
@@ -691,23 +1486,25 @@ const indexHTML = `<!doctype html>
     body {
       margin: 0;
       min-height: 100vh;
-      padding: 24px;
+      padding: 20px 20px 120px;
       font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       background: var(--bg);
       color: var(--text);
     }
 
     h2, h3 { margin: 0 0 12px; letter-spacing: 0.02em; }
-    h2 { margin-bottom: 16px; }
-    .layout {
+    h2 { margin-bottom: 14px; }
+    .main-grid {
       display: grid;
-      grid-template-columns: minmax(320px, 420px) minmax(480px, 1fr);
-      gap: 18px;
+      grid-template-columns: minmax(320px, 420px) minmax(520px, 1fr);
+      gap: 16px;
       align-items: start;
     }
-    .layout.logs {
-      margin-top: 18px;
-      grid-template-columns: repeat(2, minmax(320px, 1fr));
+    .right-stack {
+      display: grid;
+      grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr);
+      gap: 16px;
+      min-height: 560px;
     }
     .panel {
       border-radius: 16px;
@@ -716,10 +1513,7 @@ const indexHTML = `<!doctype html>
       backdrop-filter: blur(8px);
       padding: 16px;
     }
-    .robot-panel {
-      position: sticky;
-      top: 16px;
-    }
+    .robot-panel { position: sticky; top: 12px; }
     .status-line {
       margin: 12px 0 10px;
       color: #dbeafe;
@@ -768,6 +1562,7 @@ const indexHTML = `<!doctype html>
     }
     .lamp.red { background: var(--bad); box-shadow: 0 0 20px rgba(239, 68, 68, 0.85); }
     .lamp.green { background: var(--good); box-shadow: 0 0 20px rgba(34, 197, 94, 0.85); }
+    .lamp.white { background: #f8fafc; box-shadow: 0 0 20px rgba(248, 250, 252, 0.88); }
 
     .robot {
       --head-rx: 0deg;
@@ -975,9 +1770,9 @@ const indexHTML = `<!doctype html>
       gap: 8px;
       flex-wrap: wrap;
       margin: 8px 0;
+      align-items: center;
     }
     input, textarea {
-      width: 100%;
       border-radius: 10px;
       border: 1px solid rgba(100, 116, 139, 0.5);
       background: rgba(15, 23, 42, 0.6);
@@ -985,6 +1780,7 @@ const indexHTML = `<!doctype html>
       padding: 10px 12px;
       font-size: 14px;
     }
+    input { width: 100%; }
     textarea {
       min-height: 92px;
       resize: vertical;
@@ -1001,7 +1797,8 @@ const indexHTML = `<!doctype html>
     pre {
       margin: 0;
       min-height: 110px;
-      max-height: 300px;
+      height: 100%;
+      max-height: 420px;
       overflow: auto;
       border-radius: 12px;
       border: 1px solid rgba(71, 85, 105, 0.6);
@@ -1012,6 +1809,40 @@ const indexHTML = `<!doctype html>
       line-height: 1.5;
       white-space: pre-wrap;
       word-break: break-word;
+    }
+    #conversation { min-height: 180px; }
+    #logs { min-height: 220px; }
+
+    .composer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 10px 14px 12px;
+      background: linear-gradient(180deg, rgba(2, 6, 23, 0), rgba(2, 6, 23, 0.88) 26%, rgba(2, 6, 23, 0.94) 100%);
+      backdrop-filter: blur(6px);
+      border-top: 1px solid rgba(56, 189, 248, 0.25);
+      z-index: 20;
+    }
+    .composer-inner {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      max-width: 1440px;
+      margin: 0 auto;
+      align-items: end;
+    }
+    .composer textarea {
+      width: 100%;
+      min-height: 56px;
+      max-height: 140px;
+      margin: 0;
+      resize: vertical;
+    }
+    .composer button {
+      height: 56px;
+      min-width: 96px;
+      font-size: 14px;
     }
 
     @keyframes pulse {
@@ -1035,17 +1866,20 @@ const indexHTML = `<!doctype html>
     }
 
     @media (max-width: 960px) {
-      body { padding: 14px; }
-      .layout { grid-template-columns: 1fr; }
-      .layout.logs { grid-template-columns: 1fr; }
+      body { padding: 12px 12px 112px; }
+      .main-grid { grid-template-columns: 1fr; }
+      .right-stack { min-height: auto; grid-template-rows: auto auto; }
       .robot-panel { position: static; }
+      .composer { padding: 8px 10px 10px; }
+      .composer-inner { grid-template-columns: 1fr 88px; }
+      .composer button { min-width: 88px; }
     }
   </style>
 </head>
 <body>
   <h2>Terminal Web Debug</h2>
 
-  <div class="layout">
+  <div class="main-grid">
     <section class="panel robot-panel">
       <div class="robot-stage">
         <div id="lamp" class="lamp off"></div>
@@ -1080,34 +1914,33 @@ const indexHTML = `<!doctype html>
         <span id="emotionChip" class="chip">表情: 微笑</span>
         <span id="headChip" class="chip">头部: 中位</span>
       </div>
-      <p class="hint">新增技能：set_expression（emotion）与 set_head_motion（action + duration_seconds）。</p>
+      <p class="hint">技能快照：control_light / create_alarm / set_head_motion / set_reminder / send_email。</p>
     </section>
 
-    <section class="panel">
-      <h3>Ask Soul</h3>
-      <input id="session" placeholder="session_id（留空使用当前会话）" />
-      <div class="row">
-        <button onclick="newSession()">新建会话</button>
-        <button onclick="reportSkills()">重新上报技能</button>
-      </div>
-      <p id="sessionInfo" class="hint"></p>
-      <textarea id="msg" rows="3" placeholder="输入你的话"></textarea>
-      <div class="row">
-        <button onclick="askSoul()">发送</button>
-      </div>
-      <pre id="resp"></pre>
-    </section>
+    <div class="right-stack">
+      <section class="panel">
+        <h3>会话信息</h3>
+        <input id="session" placeholder="session_id（留空使用当前会话）" />
+        <div class="row">
+          <button onclick="newSession()">新建会话</button>
+          <button onclick="reportSkills()">重新上报技能</button>
+        </div>
+        <p id="sessionInfo" class="hint"></p>
+        <pre id="conversation"></pre>
+      </section>
+
+      <section class="panel">
+        <h3>Logs</h3>
+        <pre id="logs"></pre>
+      </section>
+    </div>
   </div>
 
-  <div class="layout logs">
-    <section class="panel">
-      <h3>Conversation</h3>
-      <pre id="conversation"></pre>
-    </section>
-    <section class="panel">
-      <h3>Logs</h3>
-      <pre id="logs"></pre>
-    </section>
+  <div class="composer">
+    <div class="composer-inner">
+      <textarea id="msg" rows="2" placeholder="输入你的话，按发送走完整对话流程（情绪识别 -> 灵魂更新 -> 意图识别/LLM）"></textarea>
+      <button onclick="askSoul()">发送</button>
+    </div>
   </div>
 
   <script>
@@ -1200,7 +2033,9 @@ const indexHTML = `<!doctype html>
     async function reportSkills() {
       const r = await fetch('/report-skills', { method: 'POST' });
       const out = await r.json();
-      document.getElementById('resp').textContent = JSON.stringify(out, null, 2);
+      if (!r.ok) {
+        alert(out.error || '重新上报技能失败');
+      }
       await refreshState();
     }
 
@@ -1225,12 +2060,20 @@ const indexHTML = `<!doctype html>
         body: JSON.stringify(payload)
       });
       const out = await r.json();
-      document.getElementById('resp').textContent = JSON.stringify(out, null, 2);
+      if (!r.ok) {
+        alert(out.error || '请求失败');
+      }
       document.getElementById('msg').value = '';
       await refreshState();
     }
 
     setInterval(refreshState, 1200);
+    document.getElementById('msg').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        askSoul();
+      }
+    });
     refreshState();
   </script>
 </body>

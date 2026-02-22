@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"soul/internal/domain"
+)
+
+var (
+	ErrSoulNotFound          = errors.New("soul not found")
+	ErrSoulSelectionRequired = errors.New("soul selection is required before chat")
 )
 
 type Store struct {
@@ -60,10 +66,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 			soul_id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
 			name TEXT NOT NULL,
-			mbti_ei INT NOT NULL DEFAULT 10,
-			mbti_sn INT NOT NULL DEFAULT 10,
-			mbti_tf INT NOT NULL DEFAULT 10,
-			mbti_jp INT NOT NULL DEFAULT 10,
+			mbti_type TEXT NOT NULL DEFAULT 'INTJ',
+			personality_vector JSONB NOT NULL DEFAULT '{"empathy":0.5,"sensitivity":0.5,"stability":0.5,"expressiveness":0.5,"dominance":0.5}'::jsonb,
+			emotion_state JSONB NOT NULL DEFAULT '{"p":0,"a":0,"d":0,"boredom":0,"shock_load":0,"extreme_memory":0,"long_mu_p":0,"long_mu_a":0,"long_mu_d":0,"long_volatility":0,"drift":{"empathy":0,"sensitivity":0,"stability":0,"expressiveness":0,"dominance":0},"last_interaction_at":"1970-01-01T00:00:00Z","last_updated_at":"1970-01-01T00:00:00Z"}'::jsonb,
+			model_version TEXT NOT NULL DEFAULT 'persona-pad-v2',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (user_id, name)
@@ -106,6 +112,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memory_episode_soul_created ON memory_episode(soul_id, created_at);`,
+		`ALTER TABLE souls ADD COLUMN IF NOT EXISTS mbti_type TEXT NOT NULL DEFAULT 'INTJ';`,
+		`ALTER TABLE souls ADD COLUMN IF NOT EXISTS personality_vector JSONB NOT NULL DEFAULT '{"empathy":0.5,"sensitivity":0.5,"stability":0.5,"expressiveness":0.5,"dominance":0.5}'::jsonb;`,
+		`ALTER TABLE souls ADD COLUMN IF NOT EXISTS emotion_state JSONB NOT NULL DEFAULT '{"p":0,"a":0,"d":0,"boredom":0,"shock_load":0,"extreme_memory":0,"long_mu_p":0,"long_mu_a":0,"long_mu_d":0,"long_volatility":0,"drift":{"empathy":0,"sensitivity":0,"stability":0,"expressiveness":0,"dominance":0},"last_interaction_at":"1970-01-01T00:00:00Z","last_updated_at":"1970-01-01T00:00:00Z"}'::jsonb;`,
+		`ALTER TABLE souls ADD COLUMN IF NOT EXISTS model_version TEXT NOT NULL DEFAULT 'persona-pad-v2';`,
 		`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS soul_id TEXT;`,
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS soul_id TEXT;`,
 		`ALTER TABLE memory_episode ADD COLUMN IF NOT EXISTS soul_id TEXT;`,
@@ -140,6 +150,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) ResolveOrCreateSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
+	return s.ResolveSoul(ctx, userID, terminalID, soulHint)
+}
+
+func (s *Store) ResolveSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
 	if soulID, err := s.getBoundSoul(ctx, userID, terminalID); err != nil {
 		return "", err
 	} else if soulID != "" {
@@ -152,10 +166,7 @@ func (s *Store) ResolveOrCreateSoul(ctx context.Context, userID, terminalID, sou
 	}
 
 	if resolvedSoulID == "" {
-		resolvedSoulID, err = s.createSoul(ctx, userID, terminalID, soulHint)
-		if err != nil {
-			return "", err
-		}
+		return "", ErrSoulSelectionRequired
 	}
 
 	if err := s.bindTerminalSoul(ctx, userID, terminalID, resolvedSoulID); err != nil {
@@ -217,38 +228,13 @@ func (s *Store) matchExistingSoul(ctx context.Context, userID, soulHint string) 
 			}
 			return soulID, nil
 		}
+		if cnt == 0 {
+			return "", ErrSoulNotFound
+		}
+		return "", ErrSoulSelectionRequired
 	}
 
-	return "", nil
-}
-
-func (s *Store) createSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
-	baseName := soulHint
-	if baseName == "" {
-		baseName = fmt.Sprintf("%s-soul", terminalID)
-	}
-
-	for i := range 5 {
-		soulID := "soul_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-		name := baseName
-		if i > 0 {
-			name = fmt.Sprintf("%s-%d", baseName, i+1)
-		}
-
-		tag, err := s.pool.Exec(ctx, `
-			INSERT INTO souls(soul_id, user_id, name)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (user_id, name) DO NOTHING
-		`, soulID, userID, name)
-		if err != nil {
-			return "", err
-		}
-		if tag.RowsAffected() == 1 {
-			return soulID, nil
-		}
-	}
-
-	return "", fmt.Errorf("create soul failed due to name conflicts")
+	return "", ErrSoulNotFound
 }
 
 func (s *Store) bindTerminalSoul(ctx context.Context, userID, terminalID, soulID string) error {
@@ -261,20 +247,142 @@ func (s *Store) bindTerminalSoul(ctx context.Context, userID, terminalID, soulID
 	return err
 }
 
-func (s *Store) LoadSoulProfilePrompt(ctx context.Context, soulID string) (string, error) {
-	var ei, sn, tf, jp int
+func (s *Store) BindTerminalSoul(ctx context.Context, userID, terminalID, soulID string) error {
+	return s.bindTerminalSoul(ctx, userID, terminalID, soulID)
+}
+
+func (s *Store) CreateSoulProfile(ctx context.Context, userID, name, mbtiType string, vector domain.PersonalityVector, state domain.SoulEmotionState, modelVersion string) (domain.SoulProfile, error) {
+	soulID := "soul_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if modelVersion == "" {
+		modelVersion = "persona-pad-v2"
+	}
+	vecJSON, err := json.Marshal(vector)
+	if err != nil {
+		return domain.SoulProfile{}, err
+	}
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		return domain.SoulProfile{}, err
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO souls(soul_id, user_id, name, mbti_type, personality_vector, emotion_state, model_version)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+		ON CONFLICT (user_id, name) DO NOTHING
+	`, soulID, userID, name, strings.ToUpper(strings.TrimSpace(mbtiType)), string(vecJSON), string(stateJSON), modelVersion)
+	if err != nil {
+		return domain.SoulProfile{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.SoulProfile{}, fmt.Errorf("soul name already exists: %s", name)
+	}
+	return s.GetSoulProfileByID(ctx, soulID)
+}
+
+func (s *Store) GetSoulProfileByID(ctx context.Context, soulID string) (domain.SoulProfile, error) {
+	var out domain.SoulProfile
+	var vectorRaw []byte
+	var stateRaw []byte
+	var createdAt time.Time
+	var updatedAt time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT mbti_ei, mbti_sn, mbti_tf, mbti_jp
+		SELECT soul_id, user_id, name, mbti_type, personality_vector, emotion_state, model_version, created_at, updated_at
 		FROM souls
 		WHERE soul_id=$1
-	`, soulID).Scan(&ei, &sn, &tf, &jp)
+	`, soulID).Scan(
+		&out.SoulID,
+		&out.UserID,
+		&out.Name,
+		&out.MBTIType,
+		&vectorRaw,
+		&stateRaw,
+		&out.ModelVersion,
+		&createdAt,
+		&updatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SoulProfile{}, ErrSoulNotFound
+	}
+	if err != nil {
+		return domain.SoulProfile{}, err
+	}
+	if err := json.Unmarshal(vectorRaw, &out.PersonalityVector); err != nil {
+		return domain.SoulProfile{}, err
+	}
+	if err := json.Unmarshal(stateRaw, &out.EmotionState); err != nil {
+		return domain.SoulProfile{}, err
+	}
+	out.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+	out.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+	return out, nil
+}
+
+func (s *Store) ListSoulProfiles(ctx context.Context, userID string) ([]domain.SoulProfile, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT soul_id
+		FROM souls
+		WHERE user_id=$1
+		ORDER BY created_at ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.SoulProfile
+	for rows.Next() {
+		var soulID string
+		if err := rows.Scan(&soulID); err != nil {
+			return nil, err
+		}
+		item, err := s.GetSoulProfileByID(ctx, soulID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateSoulEmotionState(ctx context.Context, soulID string, state domain.SoulEmotionState) error {
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE souls
+		SET emotion_state=$2::jsonb, updated_at=NOW()
+		WHERE soul_id=$1
+	`, soulID, string(raw))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSoulNotFound
+	}
+	return nil
+}
+
+func (s *Store) LoadSoulProfilePrompt(ctx context.Context, soulID string) (string, error) {
+	p, err := s.GetSoulProfileByID(ctx, soulID)
 	if err != nil {
 		return "", err
 	}
 
 	prompt := fmt.Sprintf(
-		"灵魂画像(MBTI数值): EI=%d, SN=%d, TF=%d, JP=%d。回复风格要与该灵魂一致。",
-		ei, sn, tf, jp,
+		"灵魂画像: MBTI=%s, T=(empathy=%.2f, sensitivity=%.2f, stability=%.2f, expressiveness=%.2f, dominance=%.2f)。当前PAD=(P=%.2f, A=%.2f, D=%.2f)，请保持该灵魂风格并兼顾安全。",
+		p.MBTIType,
+		p.PersonalityVector.Empathy,
+		p.PersonalityVector.Sensitivity,
+		p.PersonalityVector.Stability,
+		p.PersonalityVector.Expressiveness,
+		p.PersonalityVector.Dominance,
+		p.EmotionState.P,
+		p.EmotionState.A,
+		p.EmotionState.D,
 	)
 	return prompt, nil
 }

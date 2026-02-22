@@ -101,6 +101,8 @@ services:
       MQTT_BROKER_URL: tcp://mqtt:1883
       DB_DSN: ${DB_DSN}
       MEM0_BASE_URL: http://mem0:8000
+      EMOTION_BASE_URL: http://emotion-server:9012
+      INTENT_FILTER_BASE_URL: http://intent-filter:9013
     depends_on:
       postgres:
         condition: service_healthy

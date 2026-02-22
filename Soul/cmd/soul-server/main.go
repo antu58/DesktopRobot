@@ -17,10 +17,13 @@ import (
 	"soul/internal/config"
 	"soul/internal/db"
 	"soul/internal/domain"
+	"soul/internal/emotion"
+	"soul/internal/intent"
 	"soul/internal/llm"
 	"soul/internal/memory"
 	"soul/internal/mqtt"
 	"soul/internal/orchestrator"
+	"soul/internal/persona"
 	"soul/internal/skills"
 )
 
@@ -103,16 +106,91 @@ func main() {
 		os.Exit(1)
 	}
 
+	emotionClient := emotion.NewClient(cfg.EmotionBaseURL, cfg.EmotionTimeout)
+	intentClient := intent.NewClient(cfg.IntentFilterBaseURL, cfg.IntentFilterTimeout)
+	personaEngine := persona.NewEngine(persona.DefaultConfig())
+
 	orch := orchestrator.New(orchestrator.Config{
 		UserID:           cfg.UserID,
 		ChatHistoryLimit: cfg.ChatHistoryLimit,
 		ToolTimeout:      cfg.ToolTimeout,
 		LLMModel:         cfg.LLMModel,
-	}, llmProvider, memorySvc, skillRegistry, mqttHub, logger)
+	}, llmProvider, memorySvc, skillRegistry, mqttHub, emotionClient, intentClient, personaEngine, logger)
+	go orch.RunEmotionDecayPublisher(ctx, cfg.EmotionTickInterval)
 
 	r := chi.NewRouter()
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	r.Get("/v1/souls", func(w http.ResponseWriter, req *http.Request) {
+		userID := strings.TrimSpace(req.URL.Query().Get("user_id"))
+		if userID == "" {
+			userID = cfg.UserID
+		}
+		items, err := memorySvc.ListSoulProfiles(req.Context(), userID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user_id": userID,
+			"items":   items,
+		})
+	})
+	r.Post("/v1/souls", func(w http.ResponseWriter, req *http.Request) {
+		var payload domain.CreateSoulPayload
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		userID := strings.TrimSpace(payload.UserID)
+		if userID == "" {
+			userID = cfg.UserID
+		}
+		name := strings.TrimSpace(payload.Name)
+		mbti := strings.ToUpper(strings.TrimSpace(payload.MBTIType))
+		if name == "" || mbti == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name and mbti_type are required"})
+			return
+		}
+		vector, err := persona.VectorFromMBTI(mbti)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		state := persona.InitialEmotionState(time.Now().UTC())
+		profile, err := memorySvc.CreateSoulProfile(req.Context(), userID, name, mbti, vector, state, persona.ModelVersion)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, profile)
+	})
+	r.Post("/v1/souls/select", func(w http.ResponseWriter, req *http.Request) {
+		var payload domain.SelectSoulPayload
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		userID := strings.TrimSpace(payload.UserID)
+		if userID == "" {
+			userID = cfg.UserID
+		}
+		if strings.TrimSpace(payload.TerminalID) == "" || strings.TrimSpace(payload.SoulID) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "terminal_id and soul_id are required"})
+			return
+		}
+		if err := memorySvc.BindTerminalSoul(req.Context(), userID, payload.TerminalID, payload.SoulID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		skillRegistry.SetSoul(payload.TerminalID, payload.SoulID)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          true,
+			"user_id":     userID,
+			"terminal_id": payload.TerminalID,
+			"soul_id":     payload.SoulID,
+		})
 	})
 	r.Post("/v1/chat", func(w http.ResponseWriter, req *http.Request) {
 		var chatReq domain.ChatRequest
@@ -129,12 +207,16 @@ func main() {
 			return
 		}
 		if !hasKeyboardTextInput(chatReq.Inputs) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "currently only input.type=keyboard_text with non-empty text is supported"})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "currently only input.type=keyboard_text|speech_text with non-empty text is supported"})
 			return
 		}
 
 		resp, err := orch.HandleChat(req.Context(), chatReq)
 		if err != nil {
+			if errors.Is(err, db.ErrSoulSelectionRequired) || errors.Is(err, db.ErrSoulNotFound) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+				return
+			}
 			logger.Error("chat failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -175,7 +257,8 @@ func main() {
 
 func hasKeyboardTextInput(inputs []domain.ChatInput) bool {
 	for _, in := range inputs {
-		if strings.EqualFold(strings.TrimSpace(in.Type), "keyboard_text") && strings.TrimSpace(in.Text) != "" {
+		tp := strings.ToLower(strings.TrimSpace(in.Type))
+		if (tp == "keyboard_text" || tp == "speech_text") && strings.TrimSpace(in.Text) != "" {
 			return true
 		}
 	}

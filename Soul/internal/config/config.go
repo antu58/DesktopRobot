@@ -35,6 +35,11 @@ type SoulServerConfig struct {
 	Mem0APIKey                   string
 	Mem0Timeout                  time.Duration
 	Mem0AsyncQueueEnabled        bool
+	EmotionBaseURL               string
+	EmotionTimeout               time.Duration
+	IntentFilterBaseURL          string
+	IntentFilterTimeout          time.Duration
+	EmotionTickInterval          time.Duration
 }
 
 type TerminalWebConfig struct {
@@ -80,6 +85,11 @@ func LoadSoulServerConfig() (SoulServerConfig, error) {
 		Mem0APIKey:                   os.Getenv("MEM0_API_KEY"),
 		Mem0Timeout:                  time.Duration(getenvIntDefault("MEM0_TIMEOUT_SECONDS", 5)) * time.Second,
 		Mem0AsyncQueueEnabled:        getenvBoolDefault("MEM0_ASYNC_QUEUE_ENABLED", true),
+		EmotionBaseURL:               strings.TrimRight(getenvDefault("EMOTION_BASE_URL", "http://localhost:9012"), "/"),
+		EmotionTimeout:               time.Duration(getenvIntDefault("EMOTION_TIMEOUT_MS", 1500)) * time.Millisecond,
+		IntentFilterBaseURL:          strings.TrimRight(getenvDefault("INTENT_FILTER_BASE_URL", "http://localhost:9013"), "/"),
+		IntentFilterTimeout:          time.Duration(getenvIntDefault("INTENT_FILTER_TIMEOUT_MS", 1500)) * time.Millisecond,
+		EmotionTickInterval:          time.Duration(clampInt(getenvIntDefault("EMOTION_TICK_INTERVAL_SECONDS", 3), 2, 5)) * time.Second,
 	}
 
 	if cfg.DBDSN == "" {
@@ -93,6 +103,16 @@ func LoadSoulServerConfig() (SoulServerConfig, error) {
 		return SoulServerConfig{}, fmt.Errorf("ANTHROPIC_API_KEY is required when LLM_PROVIDER=claude")
 	}
 	return cfg, nil
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func LoadTerminalWebConfig() TerminalWebConfig {

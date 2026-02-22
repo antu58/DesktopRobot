@@ -6,6 +6,7 @@
 - `terminal-web`：调试终端（模拟 skills 上报与执行）
 - `emotion-server`：情感理解子服务（Python + mDeBERTa-XNLI + ONNX Runtime int8，PAD 三轴直推；输出主情绪 + PAD）
 - `intent-filter`：意图筛选子服务（Python，输入意图表 + 命令上下文，输出多意图数组与固定参数结构）
+- `persona-model`：已并入 `soul-server`（MBTI -> 人格向量 T，动态 PAD，执行概率门控）
 
 ## 端口（本地默认）
 
@@ -70,6 +71,24 @@ curl -sS -X POST http://127.0.0.1:9013/v1/intents/filter \
 - 模型会缓存到宿主机目录 `EMOTION_MODEL_CACHE_DIR`（默认 `./.cache/huggingface`），容器重建后不会重复下载。
 - 缓存目录已在 `Soul/.gitignore` 中忽略，不会被提交到 Git。
 
+## 灵魂人格模型（v2）
+
+- 新增灵魂接口：
+  - `GET /v1/souls`
+  - `POST /v1/souls`
+  - `POST /v1/souls/select`
+- `POST /v1/chat` 现支持 `keyboard_text` 与 `speech_text`。
+- 主链路增加：用户情绪分析 -> 灵魂 PAD 更新 -> MQTT 下发 `emotion_update` -> intent-filter -> MQTT 下发 `intent_action`。
+- 服务端会按 `EMOTION_TICK_INTERVAL_SECONDS`（默认 3 秒，限制 2~5 秒）执行一次“自然演化 + 持久化 + MQTT emotion_update 下发”，避免端侧情绪显示长时间停留。
+- `terminal-web` 调试页支持快速意图按钮（`/quick-intents` + `/quick-intent`）用于协议联调。
+
+历史数据清理（一次性）：
+
+```bash
+cd /Users/zhangfeng/Desktop/Linux/DesktopRobot/Soul
+./scripts/reset_soul_history.sh
+```
+
 ## 关键说明
 
 - 技能能力来自终端 `skills` 快照，支持 `skill_version` 递增。
@@ -82,4 +101,5 @@ curl -sS -X POST http://127.0.0.1:9013/v1/intents/filter \
 - 技术调研：`docs/技术调研.md`
 - 情感方案沉淀：`docs/情感理解-PAD方案沉淀.md`
 - API：`docs/API文档-Soul服务.md`
+- 人格系统方案（v2）：`docs/灵魂人格系统-v2-设计方案.md`
 - 全局通信协议：`../doc/通信协议-v2.md`

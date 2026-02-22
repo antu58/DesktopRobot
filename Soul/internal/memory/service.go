@@ -98,6 +98,30 @@ func (s *Service) ResolveOrCreateSoul(ctx context.Context, userID, terminalID, s
 	return s.store.ResolveOrCreateSoul(ctx, userID, terminalID, soulHint)
 }
 
+func (s *Service) ResolveSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
+	return s.store.ResolveSoul(ctx, userID, terminalID, soulHint)
+}
+
+func (s *Service) CreateSoulProfile(ctx context.Context, userID, name, mbtiType string, vector domain.PersonalityVector, state domain.SoulEmotionState, modelVersion string) (domain.SoulProfile, error) {
+	return s.store.CreateSoulProfile(ctx, userID, name, mbtiType, vector, state, modelVersion)
+}
+
+func (s *Service) ListSoulProfiles(ctx context.Context, userID string) ([]domain.SoulProfile, error) {
+	return s.store.ListSoulProfiles(ctx, userID)
+}
+
+func (s *Service) GetSoulProfileByID(ctx context.Context, soulID string) (domain.SoulProfile, error) {
+	return s.store.GetSoulProfileByID(ctx, soulID)
+}
+
+func (s *Service) BindTerminalSoul(ctx context.Context, userID, terminalID, soulID string) error {
+	return s.store.BindTerminalSoul(ctx, userID, terminalID, soulID)
+}
+
+func (s *Service) UpdateSoulEmotionState(ctx context.Context, soulID string, state domain.SoulEmotionState) error {
+	return s.store.UpdateSoulEmotionState(ctx, soulID, state)
+}
+
 func (s *Service) PersistMessage(ctx context.Context, sessionID, userID, terminalID, soulID, role, name, toolCallID, content string) error {
 	return s.store.SaveMessage(ctx, sessionID, userID, terminalID, soulID, role, name, toolCallID, content)
 }

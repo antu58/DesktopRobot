@@ -1,6 +1,6 @@
 # LLM 请求规范（Soul）
 
-更新时间：2026-02-21
+更新时间：2026-02-22
 
 ## 1. 目标
 
@@ -41,8 +41,9 @@ Soul 使用 OpenAI 兼容 `/chat/completions`：
 说明：
 
 - `latest_user_text` 通过 `messages.role=user` 传递，不在 system 重复注入。
-- system 只放稳定规则与上下文摘要（灵魂画像、压缩摘要、本轮观测）。
-- 若 Mem0 就绪，首轮 `tools` 可额外包含 `recall_memory`。
+- system 放稳定规则、上下文摘要与“本次调用瞬间”的情绪快照关键词。
+- system 同时注入“灵魂人格 vs 目标人物人格”的关系快照，用于回复风格约束（不改变工具集合）。
+- 默认单轮 LLM；当首轮命中 `recall_memory` 时进入二轮 LLM，且第二轮会重新按调用当刻生成情绪快照注入。
 
 ## 3. System 提示词模板
 
@@ -56,15 +57,40 @@ Soul 使用 OpenAI 兼容 `/chat/completions`：
 本轮观测文字化：
 <observation_digest，可空>
 
+情绪门控快照（当前 LLM 调用时刻）：
+- snapshot_at: <RFC3339Nano>
+- user_emotion: <label> (intensity=<0~1>)
+- soul_pad: p=<...> a=<...> d=<...>
+- execution_gate: mode=<auto_execute|blocked> probability=<0~1>
+- emotion_keywords: <comma-separated keywords>
+
+人格关系快照（用于回复风格，不改变工具集合）：
+- soul_mbti: <soul_mbti>
+- soul_traits: empathy=<...> sensitivity=<...> stability=<...> expressiveness=<...> dominance=<...>
+- target_persona: <target_mbti|heuristic_target|unknown>
+- target_traits: empathy=<...> sensitivity=<...> stability=<...> expressiveness=<...> dominance=<...>
+- relation_assessment: <同频|可协同|高张力|unknown>
+- relation_strategy: <根据关系给出的措辞/主动性/边界建议>
+
 决策规则：
 1) 先理解用户意图，再查看可用 tools。
 2) 若多个 tools 与意图匹配，可在同一轮调用多个 tools（并行或顺序）。
 3) 若 tools 语义冲突（互斥动作），只调用最符合当前意图的一组。
 4) 若没有合适 tool，可直接文本回复。
 5) tool 参数必须严格符合对应 schema，不要编造字段。
-6) 若提供 recall_memory，仅在确实需要长期记忆时调用；调用后先回顾记忆，再选择终端技能。
-7) 回复保持简洁中文。
+6) 若提供 recall_memory，仅在确实需要长期记忆时调用；调用后再进入下一轮技能决策。
+7) 参考 emotion_keywords 调整回复语气与工具选择，但不要编造不存在的技能。
+8) 根据 execution_gate 约束执行语义（blocked 时不得声称已自动执行）。
+9) 除技能执行外，结合 relation_strategy 调整措辞、长度、主动性与边界。
+10) 若判断“当前不回复更合适”，仅输出 `<NO_REPLY>`（不要附加任何文字）。
+11) 其余情况保持简洁中文回复。
 ```
+
+### 3.1 `NO_REPLY` 约定
+
+- LLM 输出 `<NO_REPLY>` / `NO_REPLY` / `[NO_REPLY]` 视为“本轮选择不回复”。
+- Soul 会将其归一为“空回复”，不再兜底填充固定文案。
+- 即使不回复，工具调用与消息持久化仍遵循当前轮执行结果。
 
 ## 4. Tool 描述规范（Body 上报）
 

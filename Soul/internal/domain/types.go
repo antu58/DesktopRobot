@@ -6,17 +6,21 @@ type ChatRequest struct {
 	UserID     string      `json:"user_id,omitempty"`
 	SessionID  string      `json:"session_id"`
 	TerminalID string      `json:"terminal_id"`
+	SoulID     string      `json:"soul_id,omitempty"`
 	SoulHint   string      `json:"soul_hint,omitempty"`
 	Inputs     []ChatInput `json:"inputs"`
 }
 
 type ChatResponse struct {
-	SessionID      string   `json:"session_id"`
-	TerminalID     string   `json:"terminal_id"`
-	SoulID         string   `json:"soul_id"`
-	Reply          string   `json:"reply"`
-	ExecutedSkills []string `json:"executed_skills,omitempty"`
-	ContextSummary string   `json:"context_summary,omitempty"`
+	SessionID       string   `json:"session_id"`
+	TerminalID      string   `json:"terminal_id"`
+	SoulID          string   `json:"soul_id"`
+	Reply           string   `json:"reply"`
+	ExecutedSkills  []string `json:"executed_skills,omitempty"`
+	ContextSummary  string   `json:"context_summary,omitempty"`
+	IntentDecision  string   `json:"intent_decision,omitempty"`
+	ExecMode        string   `json:"exec_mode,omitempty"`
+	ExecProbability float64  `json:"exec_probability,omitempty"`
 }
 
 type Message struct {
@@ -86,6 +90,45 @@ type SkillReport struct {
 	Skills       []SkillDefinition `json:"skills"`
 }
 
+type IntentMatchRules struct {
+	KeywordsAny      []string `json:"keywords_any,omitempty"`
+	KeywordsAll      []string `json:"keywords_all,omitempty"`
+	NegativeKeywords []string `json:"negative_keywords,omitempty"`
+	RegexAny         []string `json:"regex_any,omitempty"`
+	RegexAll         []string `json:"regex_all,omitempty"`
+	EntityTypesAny   []string `json:"entity_types_any,omitempty"`
+	EntityTypesAll   []string `json:"entity_types_all,omitempty"`
+	Examples         []string `json:"examples,omitempty"`
+	MinConfidence    float64  `json:"min_confidence,omitempty"`
+}
+
+type IntentSlotBinding struct {
+	Name                string   `json:"name"`
+	Required            bool     `json:"required,omitempty"`
+	FromEntityTypes     []string `json:"from_entity_types,omitempty"`
+	UseNormalizedEntity *bool    `json:"use_normalized_entity,omitempty"`
+	Regex               string   `json:"regex,omitempty"`
+	RegexGroup          int      `json:"regex_group,omitempty"`
+	FromTimeKey         string   `json:"from_time_key,omitempty"`
+	TimeKind            string   `json:"time_kind,omitempty"`
+	Default             any      `json:"default,omitempty"`
+}
+
+type IntentSpec struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name,omitempty"`
+	Priority  int                 `json:"priority,omitempty"`
+	HintScore float64             `json:"hint_score,omitempty"`
+	Match     IntentMatchRules    `json:"match,omitempty"`
+	Slots     []IntentSlotBinding `json:"slots,omitempty"`
+}
+
+type IntentCatalogReport struct {
+	TerminalID     string       `json:"terminal_id"`
+	CatalogVersion int64        `json:"catalog_version,omitempty"`
+	IntentCatalog  []IntentSpec `json:"intent_catalog"`
+}
+
 type InvokeRequest struct {
 	RequestID string          `json:"request_id"`
 	Skill     string          `json:"skill"`
@@ -97,4 +140,92 @@ type InvokeResult struct {
 	OK        bool   `json:"ok"`
 	Output    string `json:"output"`
 	Error     string `json:"error,omitempty"`
+}
+
+type EmotionSignal struct {
+	Emotion    string  `json:"emotion,omitempty"`
+	P          float64 `json:"p"`
+	A          float64 `json:"a"`
+	D          float64 `json:"d"`
+	Intensity  float64 `json:"intensity"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
+type PersonalityVector struct {
+	Empathy        float64 `json:"empathy"`
+	Sensitivity    float64 `json:"sensitivity"`
+	Stability      float64 `json:"stability"`
+	Expressiveness float64 `json:"expressiveness"`
+	Dominance      float64 `json:"dominance"`
+}
+
+type SoulEmotionState struct {
+	P                 float64           `json:"p"`
+	A                 float64           `json:"a"`
+	D                 float64           `json:"d"`
+	Boredom           float64           `json:"boredom"`
+	ShockLoad         float64           `json:"shock_load"`
+	ExtremeMemory     float64           `json:"extreme_memory"`
+	LongMuP           float64           `json:"long_mu_p"`
+	LongMuA           float64           `json:"long_mu_a"`
+	LongMuD           float64           `json:"long_mu_d"`
+	LongVolatility    float64           `json:"long_volatility"`
+	Drift             PersonalityVector `json:"drift"`
+	LockUntil         string            `json:"lock_until,omitempty"`
+	StableSince       string            `json:"stable_since,omitempty"`
+	LastInteractionAt string            `json:"last_interaction_at,omitempty"`
+	LastUpdatedAt     string            `json:"last_updated_at"`
+}
+
+type SoulProfile struct {
+	SoulID            string            `json:"soul_id"`
+	UserID            string            `json:"user_id"`
+	Name              string            `json:"name"`
+	MBTIType          string            `json:"mbti_type"`
+	PersonalityVector PersonalityVector `json:"personality_vector"`
+	EmotionState      SoulEmotionState  `json:"emotion_state"`
+	ModelVersion      string            `json:"model_version"`
+	CreatedAt         string            `json:"created_at,omitempty"`
+	UpdatedAt         string            `json:"updated_at,omitempty"`
+}
+
+type CreateSoulPayload struct {
+	UserID   string `json:"user_id,omitempty"`
+	Name     string `json:"name"`
+	MBTIType string `json:"mbti_type"`
+}
+
+type SelectSoulPayload struct {
+	UserID     string `json:"user_id,omitempty"`
+	TerminalID string `json:"terminal_id"`
+	SoulID     string `json:"soul_id"`
+}
+
+type EmotionUpdatePayload struct {
+	SessionID       string           `json:"session_id"`
+	TerminalID      string           `json:"terminal_id"`
+	SoulID          string           `json:"soul_id"`
+	UserEmotion     EmotionSignal    `json:"user_emotion"`
+	SoulEmotion     SoulEmotionState `json:"soul_emotion"`
+	ExecProbability float64          `json:"exec_probability"`
+	ExecMode        string           `json:"exec_mode"`
+	TS              string           `json:"ts"`
+}
+
+type IntentActionItem struct {
+	IntentID   string         `json:"intent_id"`
+	IntentName string         `json:"intent_name,omitempty"`
+	Confidence float64        `json:"confidence"`
+	Parameters map[string]any `json:"parameters,omitempty"`
+	Normalized map[string]any `json:"normalized,omitempty"`
+}
+
+type IntentActionPayload struct {
+	RequestID       string             `json:"request_id"`
+	SessionID       string             `json:"session_id"`
+	TerminalID      string             `json:"terminal_id"`
+	SoulID          string             `json:"soul_id"`
+	Intents         []IntentActionItem `json:"intents"`
+	ExecProbability float64            `json:"exec_probability"`
+	TS              string             `json:"ts"`
 }

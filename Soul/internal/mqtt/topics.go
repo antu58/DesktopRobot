@@ -18,6 +18,10 @@ func TopicTerminalResult(prefix string) string {
 	return fmt.Sprintf("%s/terminal/+/result/+", prefix)
 }
 
+func TopicTerminalIntentCatalog(prefix string) string {
+	return fmt.Sprintf("%s/terminal/+/intent_catalog", prefix)
+}
+
 func TopicInvoke(prefix, terminalID, requestID string) string {
 	return fmt.Sprintf("%s/terminal/%s/invoke/%s", prefix, terminalID, requestID)
 }
@@ -40,4 +44,16 @@ func TopicHeartbeat(prefix, terminalID string) string {
 
 func TopicStatus(prefix, terminalID string) string {
 	return fmt.Sprintf("%s/terminal/%s/status", prefix, terminalID)
+}
+
+func TopicIntentCatalog(prefix, terminalID string) string {
+	return fmt.Sprintf("%s/terminal/%s/intent_catalog", prefix, terminalID)
+}
+
+func TopicEmotionUpdate(prefix, terminalID string) string {
+	return fmt.Sprintf("%s/terminal/%s/emotion_update", prefix, terminalID)
+}
+
+func TopicIntentAction(prefix, terminalID string) string {
+	return fmt.Sprintf("%s/terminal/%s/intent_action", prefix, terminalID)
 }

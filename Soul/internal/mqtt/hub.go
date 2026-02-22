@@ -93,6 +93,9 @@ func (h *Hub) subscribeHandlers() error {
 	if token := h.client.Subscribe(TopicTerminalSkills(h.cfg.TopicPrefix), 1, h.handleSkillReport); token.Wait() && token.Error() != nil {
 		return token.Error()
 	}
+	if token := h.client.Subscribe(TopicTerminalIntentCatalog(h.cfg.TopicPrefix), 1, h.handleIntentCatalog); token.Wait() && token.Error() != nil {
+		return token.Error()
+	}
 	if token := h.client.Subscribe(TopicTerminalOnline(h.cfg.TopicPrefix), 1, h.handleOnline); token.Wait() && token.Error() != nil {
 		return token.Error()
 	}
@@ -144,6 +147,49 @@ func (h *Hub) handleSkillReport(_ paho.Client, msg paho.Message) {
 	h.registry.SetOnline(terminalID, true)
 	state, _ := h.registry.GetState(terminalID)
 	h.logger.Info("skills updated", "terminal_id", terminalID, "soul_id", soulID, "skill_version", state.SkillVersion, "skill_count", len(report.Skills))
+}
+
+func (h *Hub) handleIntentCatalog(_ paho.Client, msg paho.Message) {
+	terminalID, err := ParseTerminalID(msg.Topic(), h.cfg.TopicPrefix)
+	if err != nil {
+		h.logger.Warn("skip invalid intent catalog topic", "topic", msg.Topic(), "error", err)
+		return
+	}
+
+	var report domain.IntentCatalogReport
+	if err := json.Unmarshal(msg.Payload(), &report); err != nil {
+		var intentsOnly []domain.IntentSpec
+		if err2 := json.Unmarshal(msg.Payload(), &intentsOnly); err2 != nil {
+			h.logger.Warn("invalid intent catalog payload", "terminal_id", terminalID, "error", err)
+			return
+		}
+		report = domain.IntentCatalogReport{
+			TerminalID:     terminalID,
+			IntentCatalog:  intentsOnly,
+			CatalogVersion: 0,
+		}
+	}
+	if strings.TrimSpace(report.TerminalID) == "" {
+		report.TerminalID = terminalID
+	}
+	if report.TerminalID != terminalID {
+		h.logger.Warn("intent catalog terminal mismatch", "topic_terminal", terminalID, "payload_terminal", report.TerminalID)
+		return
+	}
+
+	soulID := ""
+	if h.soulResolver != nil {
+		resolved, resolveErr := h.soulResolver.ResolveOrCreateSoul(context.Background(), terminalID, "")
+		if resolveErr != nil {
+			h.logger.Warn("resolve soul failed when intent catalog report", "terminal_id", terminalID, "error", resolveErr)
+		} else {
+			soulID = resolved
+		}
+	}
+
+	h.registry.SetIntentCatalog(terminalID, soulID, report.CatalogVersion, report.IntentCatalog)
+	state, _ := h.registry.GetState(terminalID)
+	h.logger.Info("intent catalog updated", "terminal_id", terminalID, "soul_id", soulID, "catalog_version", state.CatalogVersion, "intent_count", len(report.IntentCatalog))
 }
 
 func (h *Hub) handleOnline(_ paho.Client, msg paho.Message) {
@@ -269,6 +315,34 @@ func (h *Hub) PublishStatus(_ context.Context, terminalID, status, message, sess
 		return err
 	}
 	topic := TopicStatus(h.cfg.TopicPrefix, terminalID)
+	token := h.client.Publish(topic, 1, false, body)
+	token.Wait()
+	return token.Error()
+}
+
+func (h *Hub) PublishEmotionUpdate(_ context.Context, terminalID string, payload domain.EmotionUpdatePayload) error {
+	if h.client == nil {
+		return fmt.Errorf("mqtt client is not started")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	topic := TopicEmotionUpdate(h.cfg.TopicPrefix, terminalID)
+	token := h.client.Publish(topic, 1, false, body)
+	token.Wait()
+	return token.Error()
+}
+
+func (h *Hub) PublishIntentAction(_ context.Context, terminalID string, payload domain.IntentActionPayload) error {
+	if h.client == nil {
+		return fmt.Errorf("mqtt client is not started")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	topic := TopicIntentAction(h.cfg.TopicPrefix, terminalID)
 	token := h.client.Publish(topic, 1, false, body)
 	token.Wait()
 	return token.Error()

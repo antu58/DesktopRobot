@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import time
 from functools import lru_cache
@@ -97,6 +98,41 @@ LABEL_ALIASES = {
     "boredom": "boredom",
 }
 
+# Text-rule fallback for low-amplitude PAD outputs.
+# Purpose: keep task commands neutral while lifting clear affective utterances.
+EMOTION_KEYWORDS: dict[str, list[str]] = {
+    "anger": ["生气", "愤怒", "火大", "气死", "恼火", "怒了", "发火"],
+    "anxiety": ["焦虑", "紧张", "不安", "慌", "睡不着", "忐忑", "压力很大", "担心"],
+    "boredom": ["无聊", "没意思", "很闲", "发呆", "无趣"],
+    "calm": ["平静", "冷静", "淡定", "放松", "安稳"],
+    "disappointment": ["失望", "落空", "白期待", "不如预期"],
+    "disgust": ["恶心", "反胃", "厌恶", "嫌弃"],
+    "excitement": ["兴奋", "激动", "太爽", "燃起来", "冲啊"],
+    "fear": ["害怕", "恐惧", "吓到", "可怕", "发怵"],
+    "frustration": ["挫败", "受挫", "崩溃", "卡住了", "做不出来", "烦死了"],
+    "gratitude": ["感谢", "谢谢", "多谢", "感激"],
+    "joy": ["开心", "高兴", "快乐", "哈哈", "太棒了", "不错", "喜悦"],
+    "neutral": [],
+    "relief": ["松了一口气", "还好", "终于结束", "放心了", "释然"],
+    "sadness": ["难过", "伤心", "失恋", "想哭", "哭了", "低落", "不开心"],
+    "surprise": ["惊讶", "震惊", "没想到", "居然", "竟然", "哇"],
+}
+
+TASK_HINTS = [
+    "开灯",
+    "关灯",
+    "亮灯",
+    "变红",
+    "变绿",
+    "提醒",
+    "闹钟",
+    "点头",
+    "摇头",
+    "发邮件",
+    "发一封邮件",
+    "设置",
+]
+
 
 class AnalyzeRequest(BaseModel):
     text: str = Field(..., min_length=1)
@@ -118,6 +154,84 @@ def normalize_label(label: str) -> str | None:
 
 def clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
+
+
+def _normalize_text_for_rules(text: str) -> str:
+    value = text.strip().lower()
+    value = re.sub(r"\s+", "", value)
+    return value
+
+
+def _keyword_scores(text: str) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    for label, words in EMOTION_KEYWORDS.items():
+        if not words:
+            continue
+        score = 0.0
+        for word in words:
+            if word in text:
+                # Longer phrases are usually stronger emotional evidence.
+                score += min(1.0, 0.26 + 0.06 * len(word))
+        if score > 0:
+            scores[label] = clamp(score, 0.0, 1.0)
+    return scores
+
+
+def _looks_like_task_command(text: str) -> bool:
+    return any(hint in text for hint in TASK_HINTS)
+
+
+def _pad_similarity(label: str, p: float, a: float, d: float) -> float:
+    proto = PAD_MAP[label]
+    dp = p - proto["p"]
+    da = a - proto["a"]
+    dd = d - proto["d"]
+    dist = sqrt(dp * dp + da * da + dd * dd)
+    # Max distance in [-1,1]^3 is about 3.464.
+    return clamp(1.0 - dist/2.9, 0.0, 1.0)
+
+
+def _refine_emotion_with_rules(text: str, p: float, a: float, d: float, intensity: float, base_emotion: str) -> tuple[str, float, float, float, float]:
+    normalized = _normalize_text_for_rules(text)
+    keyword_scores = _keyword_scores(normalized)
+    kw_label = "neutral"
+    kw_score = 0.0
+    if keyword_scores:
+        kw_label, kw_score = max(keyword_scores.items(), key=lambda item: item[1])
+
+    # Preserve neutral on low-energy task commands.
+    low_energy = intensity < 0.20 and abs(p) < 0.25 and abs(a) < 0.25 and abs(d) < 0.25
+    if low_energy and kw_score < 0.30 and _looks_like_task_command(normalized):
+        return "neutral", p, a, d, min(intensity, 0.18)
+
+    best_label = base_emotion
+    best_score = -1.0
+    for label in PAD_MAP:
+        score = 0.70 * _pad_similarity(label, p, a, d)
+        score += 1.05 * keyword_scores.get(label, 0.0)
+        if label == base_emotion:
+            score += 0.04
+        if label == "neutral" and kw_score >= 0.35:
+            score -= 0.20
+        if score > best_score:
+            best_score = score
+            best_label = label
+
+    if best_label == "neutral" and kw_score >= 0.40:
+        best_label = kw_label
+
+    # Blend toward the keyword-dominant prototype when textual evidence is clear.
+    if kw_score >= 0.55 and best_label != "neutral":
+        proto = PAD_MAP[best_label]
+        blend = clamp(0.30 + 0.35 * kw_score, 0.30, 0.75)
+        p = clamp((1 - blend) * p + blend * proto["p"])
+        a = clamp((1 - blend) * a + blend * proto["a"])
+        d = clamp((1 - blend) * d + blend * proto["d"])
+        intensity = max(intensity, clamp(0.25 + 0.45 * kw_score, 0.0, 1.0))
+    elif best_label != "neutral" and kw_score >= 0.30:
+        intensity = max(intensity, clamp(0.18 + 0.30 * kw_score, 0.0, 1.0))
+
+    return best_label, p, a, d, clamp(intensity, 0.0, 1.0)
 
 
 def _ensure_onnx_export() -> Path:
@@ -329,6 +443,7 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
         start = time.perf_counter()
         p, a, d, intensity = infer_pad(req.text)
         emotion = infer_emotion_from_pad(p, a, d)
+        emotion, p, a, d, intensity = _refine_emotion_with_rules(req.text, p, a, d, intensity, emotion)
         out = {
             "emotion": emotion,
             "p": round(p, 3),

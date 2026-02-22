@@ -38,6 +38,7 @@
   "user_id": "demo-user",
   "session_id": "s1",
   "terminal_id": "terminal-001",
+  "soul_id": "soul_xxx",
   "soul_hint": "friendly",
   "inputs": [
     {
@@ -64,19 +65,27 @@
 
 当前 Phase 1 限制：
 
-- 至少存在 1 条非空 `keyboard_text`。
-- 非 `keyboard_text` 输入当前不进入主回复推理。
+- 至少存在 1 条非空 `keyboard_text` 或 `speech_text`。
+- 其他输入类型当前不进入主回复推理。
 
 会话计时规则：
 
 - 每次成功写入用户输入（`role=user`）重置 3 分钟空闲计时。
 - 连续 3 分钟无新输入触发空闲总结。
 
+情绪定时推送规则：
+
+- 服务端会按 `EMOTION_TICK_INTERVAL_SECONDS`（默认 3 秒，范围 2~5 秒）执行一次灵魂情绪“自然演化”。
+- 每次演化都会先落库更新 `emotion_state`，随后通过 MQTT 下发一次 `emotion_update`。
+- 定时推送的 `emotion_update.session_id` 固定为 `system_decay_tick`，用于端侧区分“非对话输入触发”的状态演化。
+
 技能调度规则（当前实现）：
 
 - 默认：单次 LLM，直接选择终端技能并执行。
 - 同一轮可调用多个终端技能（若模型返回多个非冲突 tool calls）。
 - 特殊：若首轮选择内置 `recall_memory`（Mem0 历史回顾），服务端先向终端发送 `status=mem0_searching`，查询后进行第二次 LLM，再执行终端技能。
+- 无论首轮还是二轮，在发起该轮 LLM 请求前都会重新计算“当刻情绪快照”（用户情绪 + 灵魂 PAD + 执行门控）并注入 system prompt。
+- 同时注入“灵魂人格 vs 目标人物人格”关系快照，指导回复风格（措辞、主动性、边界），不改变工具集合。
 - `recall_memory` 仅在 Mem0 就绪时暴露给模型；Mem0 未就绪时不会触发该分支。
 - `executed_skills` 可能包含 `recall_memory`。
 
@@ -88,10 +97,18 @@
   "terminal_id": "terminal-001",
   "soul_id": "soul_xxx",
   "reply": "是的，2+2=4。",
-  "executed_skills": ["recall_memory", "light_green"],
-  "context_summary": "用户持续进行基础事实问答，机器人保持简洁确认式回应。"
+  "executed_skills": ["recall_memory", "control_light"],
+  "context_summary": "用户持续进行基础事实问答，机器人保持简洁确认式回应。",
+  "intent_decision": "fallback_reasoning",
+  "exec_mode": "auto_execute",
+  "exec_probability": 0.91
 }
 ```
+
+补充说明：
+
+- 当模型输出 `<NO_REPLY>` / `NO_REPLY` / `[NO_REPLY]` 时，服务端会将其归一为“空回复”，即 `reply=""`。
+- “空回复”仅表示本轮选择不输出文本；技能执行路径与 MQTT 行为仍按本轮决策执行。
 
 典型失败响应：
 
@@ -100,7 +117,70 @@
 ```
 
 ```json
-{"error":"currently only input.type=keyboard_text with non-empty text is supported"}
+{"error":"currently only input.type=keyboard_text|speech_text with non-empty text is supported"}
+```
+
+```json
+{"error":"soul selection is required before chat"}
+```
+
+## 3.3 `GET /v1/souls`
+
+用途：按用户列出灵魂。
+
+响应：
+
+```json
+{
+  "user_id": "demo-user",
+  "items": [
+    {
+      "soul_id": "soul_xxx",
+      "name": "工作助理",
+      "mbti_type": "INFJ",
+      "personality_vector": {
+        "empathy": 0.72,
+        "sensitivity": 0.54,
+        "stability": 0.58,
+        "expressiveness": 0.38,
+        "dominance": 0.33
+      },
+      "emotion_state": {
+        "p": 0.02,
+        "a": -0.04,
+        "d": 0.01
+      }
+    }
+  ]
+}
+```
+
+## 3.4 `POST /v1/souls`
+
+用途：创建灵魂（MBTI -> 人格向量自动生成）。
+
+请求体：
+
+```json
+{
+  "user_id": "demo-user",
+  "name": "工作助理",
+  "mbti_type": "INFJ"
+}
+```
+
+## 3.5 `POST /v1/souls/select`
+
+用途：终端选择灵魂（绑定 terminal 与 soul）。
+
+请求体：
+
+```json
+{
+  "user_id": "demo-user",
+  "terminal_id": "terminal-001",
+  "soul_id": "soul_xxx"
+}
 ```
 
 ## 4. `terminal-web`（调试服务）
@@ -124,6 +204,9 @@
 - `head_pose`：机器人头部朝向（`中位`/`抬头`/`低头`/`左看`/`右看`）。
 - `head_motion`：当前进行中的头部动态动作（`点头`/`摇头`；无则空）。
 - `head_motion_duration_seconds`：当前头部动态动作持续时长（秒）。
+- `emotion_p / emotion_a / emotion_d`：当前灵魂 PAD（调试展示）。
+- `exec_mode`：执行模式（`auto_execute`/`blocked`）。
+- `exec_probability`：当前执行概率（0~1）。
 
 ## 4.3 `POST /session/new`
 
@@ -140,15 +223,16 @@
 
 ## 4.4 `POST /report-skills`
 
-用途：手工触发重新上报技能快照。  
+用途：手工触发重新上报技能快照与意图快照。  
 请求体：无。
 
-当前终端默认上报 4 个技能：
+当前终端默认上报 5 个技能：
 
-- `light_red`：亮红灯（否定/错误判断）。
-- `light_green`：亮绿灯（肯定/正确判断）。
-- `set_expression`：设置表情，参数 `emotion` 枚举：`微笑`/`大笑`/`生气`/`哭`/`不开心`。
-- `set_head_motion`：头部动作，参数 `action` 枚举：`抬头`/`低头`/`左看`/`右看`/`点头`/`摇头`；`duration_seconds` 为可选持续时间（0.2~10，主要用于点头/摇头）。
+- `control_light`：控制灯光。参数：`mode=on/off/set_color`，可选 `color=white/red/green`。
+- `create_alarm`：订闹钟。参数：`trigger_at` 或 `trigger_in_seconds`（二选一），可选 `label`。
+- `set_head_motion`：头部动作。参数：`action=点头/摇头`，可选 `duration_seconds`（0.2~10）。
+- `set_reminder`：设置提醒事项。参数：`content`（必填），可选 `due_at`。
+- `send_email`：发邮件（调试页仅模拟执行）。参数：`to/subject/body`（均必填）。
 
 ## 4.5 `POST /ask`
 
@@ -178,6 +262,47 @@
 ## 4.6 `GET /`
 
 用途：调试页面。
+
+## 4.7 `GET /quick-intents`
+
+用途：返回测试网页可快速触发的意图预设列表（用于测试 `intent_action` 协议）。
+
+## 4.8 `POST /quick-intent`
+
+用途：快速触发一个意图（默认通过 MQTT 发布 `intent_action`，失败时本地回退处理并展示）。
+
+请求体示例：
+
+```json
+{
+  "intent_id": "qk_light_on",
+  "session_id": "s1",
+  "transport": "mqtt"
+}
+```
+
+说明：
+
+- `intent_id`：来自 `/quick-intents`。
+- `session_id`：可选，空则使用当前会话。
+- `transport`：`mqtt`（默认）或 `local`。
+- 当前预置快速意图：
+  - `qk_light_on` / `qk_light_off` / `qk_light_red` / `qk_light_green`
+  - `qk_alarm_10m`
+  - `qk_nod` / `qk_shake`
+
+调试页 15 情绪响应规则（由 `emotion_update.user_emotion` 驱动）：
+
+- 强负向（`anger/disgust/frustration`）：`生气 + 摇头`
+- 压力型（`anxiety/fear`）：`不开心`，高强度时 `摇头`
+- 低落型（`sadness/disappointment/boredom`）：`不开心`，高强度时 `哭 + 摇头`
+- 正向（`joy/gratitude/relief`）：`微笑`，中高强度时 `点头`
+- 高唤醒正向（`excitement/surprise`）：`大笑`，中高强度时 `点头`
+- 稳态（`calm/neutral`）：`微笑`
+
+补充约定：
+
+- 当 `emotion_update.session_id=system_decay_tick` 时，表示服务端定时自然演化推送，不代表新增用户输入。
 
 ## 5. `emotion-server`（情感理解子服务）
 
@@ -295,15 +420,26 @@
 ```json
 {
   "request_id": "optional",
-  "command": "帮我关闭窗帘并且定一个30分钟的闹钟我要休息一会",
+  "command": "帮我把灯变成绿色，然后10分钟后提醒我",
   "intent_catalog": [
     {
-      "id": "curtain_control",
-      "name": "窗帘控制",
-      "match": {"keywords_any": ["窗帘", "关闭"]},
+      "id": "intent_light_control",
+      "name": "控制灯",
+      "match": {"keywords_any": ["开灯", "打开灯", "把灯打开", "灯打开", "关灯", "关闭灯", "灯关了", "灯关", "灯", "红色", "绿色", "白色", "灯白色", "变红", "变绿", "变白"]},
       "slots": [
-        {"name": "target", "required": true, "from_entity_types": ["device"]},
-        {"name": "action", "required": true, "from_entity_types": ["action"]}
+        {"name": "skill", "default": "control_light"},
+        {"name": "mode", "regex": "(开灯|打开灯|把灯打开|灯打开|打开|开启|关灯|关闭灯|把灯关掉|灯关了|关了|关掉|关闭|变红|变红色|变绿|变绿色|变白|变白色|红灯|绿灯|白灯)", "regex_group": 1},
+        {"name": "color", "regex": "(红色|红|绿色|绿|白色|白|白灯|灯白色)", "regex_group": 1}
+      ]
+    },
+    {
+      "id": "intent_alarm_create",
+      "name": "订闹钟",
+      "match": {"keywords_any": ["闹钟", "提醒", "alarm"]},
+      "slots": [
+        {"name": "skill", "default": "create_alarm"},
+        {"name": "trigger_in_seconds", "regex": "([0-9]+(?:\\.[0-9]+)?)\\s*分钟", "regex_group": 1},
+        {"name": "label", "default": "提醒事项"}
       ]
     }
   ],
@@ -324,21 +460,33 @@
   "request_id": "ifr_xxx",
   "decision": {
     "action": "execute_intents",
-    "trigger_intent_id": "curtain_control",
+    "trigger_intent_id": "intent_light_control",
     "reason": "matched_catalog_intents"
   },
   "intents": [
     {
-      "intent_id": "curtain_control",
-      "intent_name": "窗帘控制",
+      "intent_id": "intent_light_control",
+      "intent_name": "控制灯",
       "confidence": 0.91,
       "status": "ready",
       "segment_index": 0,
-      "span": {"text": "帮我关闭窗帘", "start": 0, "end": 6},
-      "parameters": {"target": "curtain", "action": "close"},
-      "normalized": {},
+      "span": {"text": "把灯变成绿色", "start": 0, "end": 6},
+      "parameters": {"mode": "set_color", "color": "green"},
+      "normalized": {"skill": "control_light", "mode": "set_color", "color": "green"},
       "missing_parameters": [],
-      "evidence": [{"type": "keyword_any", "value": "窗帘", "score": 1.0}]
+      "evidence": [{"type": "keyword_any", "value": "灯", "score": 1.0}]
+    },
+    {
+      "intent_id": "intent_alarm_create",
+      "intent_name": "订闹钟",
+      "confidence": 0.83,
+      "status": "ready",
+      "segment_index": 1,
+      "span": {"text": "10分钟后提醒我", "start": 7, "end": 14},
+      "parameters": {"trigger_in_seconds": 600, "label": "提醒事项"},
+      "normalized": {"skill": "create_alarm", "trigger_in_seconds": 600, "label": "提醒事项"},
+      "missing_parameters": [],
+      "evidence": [{"type": "keyword_any", "value": "提醒", "score": 1.0}]
     }
   ],
   "meta": {
