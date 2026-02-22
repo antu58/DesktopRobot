@@ -1,6 +1,6 @@
 # API 文档（Soul 服务）
 
-更新时间：2026-02-21  
+更新时间：2026-02-22  
 状态：`实施中（Phase 1）`
 
 ## 1. 文档定位
@@ -12,6 +12,7 @@
 
 - `soul-server`：`http://localhost:9010`
 - `terminal-web`：`http://localhost:9011`
+- `emotion-server`：`http://localhost:9012`
 
 ## 3. `soul-server`
 
@@ -177,7 +178,87 @@
 
 用途：调试页面。
 
-## 5. 关联文档
+## 5. `emotion-server`（情感理解子服务）
+
+> 设计目标：作为主服务可复用的“情感理解网关”，固定输出 `emotion + PAD + intensity`。  
+> 情绪模式固定为 `compact`（不提供切换配置）。
+
+## 5.1 `GET /healthz`
+
+用途：检查 emotion-server 状态（纯 Go 本地分析引擎）。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "schema": "compact",
+  "engine": "go-lexical-v1",
+  "labels": ["anger", "anxiety", "boredom", "calm", "confusion", "disappointment", "disgust", "embarrassment", "excitement", "fear", "frustration", "gratitude", "guilt", "hope", "joy", "neutral", "pride", "relief", "resignation", "sadness", "surprise"]
+}
+```
+
+## 5.2 `GET /v1/emotion/pad-table`
+
+用途：查看固定 `compact` 模式下的 PAD 对照表。
+
+## 5.3 `POST /v1/emotion/analyze`
+
+用途：输入文本，返回情感标签与 PAD。
+
+请求体：
+
+```json
+{
+  "text": "今天被老板批评了"
+}
+```
+
+响应体：
+
+```json
+{
+  "emotion": "frustration",
+  "p": -0.52,
+  "a": 0.58,
+  "d": -0.08,
+  "intensity": 0.973075,
+  "latency_ms": 18.234
+}
+```
+
+说明：
+
+- `latency_ms` 为 emotion-server 单次处理耗时。
+- 不做统一阈值截断，保留原始强度分布。
+
+## 5.4 `POST /v1/emotion/convert`
+
+用途：将 `{emotion, confidence}` 转换成 `{emotion, p, a, d, intensity}`。
+
+请求体：
+
+```json
+{
+  "emotion": "sadness",
+  "confidence": 0.91
+}
+```
+
+响应体：
+
+```json
+{
+  "emotion": "sadness",
+  "p": -0.65,
+  "a": -0.15,
+  "d": -0.35,
+  "intensity": 0.91,
+  "latency_ms": 2.019
+}
+```
+
+## 6. 关联文档
 
 - Soul 设计目标：`设计目标.md`
 - LLM 请求规范：`LLM请求规范.md`
