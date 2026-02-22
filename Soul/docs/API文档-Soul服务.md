@@ -181,30 +181,38 @@
 ## 5. `emotion-server`（情感理解子服务）
 
 > 设计目标：作为主服务可复用的“情感理解网关”，固定输出 `emotion + PAD + intensity`。  
-> 情绪模式固定为 `compact`（不提供切换配置）。
+> 使用 `mDeBERTa-v3-base-xnli-multilingual-nli-2mil7` + ONNX Runtime（CPU int8）做 PAD 三轴直推，再按 15 类 PAD 原型输出主情绪。
 
 ## 5.1 `GET /healthz`
 
-用途：检查 emotion-server 状态（纯 Go 本地分析引擎）。
+用途：检查 emotion-server 状态（Python + mDeBERTa-XNLI 模型服务）。
 
 成功响应：
 
 ```json
 {
   "ok": true,
-  "schema": "compact",
-  "engine": "go-lexical-v1",
-  "labels": ["anger", "anxiety", "boredom", "calm", "confusion", "disappointment", "disgust", "embarrassment", "excitement", "fear", "frustration", "gratitude", "guilt", "hope", "joy", "neutral", "pride", "relief", "resignation", "sadness", "surprise"]
+  "engine": "python-mdeberta-xnli-pad",
+  "model": "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+  "analyze_mode": "pad_direct_nli",
+  "nli_hypothesis_template": "这句话表达的是{}。",
+  "runtime_backend": "onnxruntime",
+  "runtime_int8": true,
+  "runtime_model_dir": "/models/onnx/MoritzLaurer--mDeBERTa-v3-base-xnli-multilingual-nli-2mil7/int8",
+  "warmup_ok": true,
+  "warmup_ms": 76670.127,
+  "warmup_error": "",
+  "pad_labels": ["anger", "anxiety", "boredom", "calm", "disappointment", "disgust", "excitement", "fear", "frustration", "gratitude", "joy", "neutral", "relief", "sadness", "surprise"]
 }
 ```
 
 ## 5.2 `GET /v1/emotion/pad-table`
 
-用途：查看固定 `compact` 模式下的 PAD 对照表。
+用途：查看主情绪到 PAD 的对照表。
 
 ## 5.3 `POST /v1/emotion/analyze`
 
-用途：输入文本，返回情感标签与 PAD。
+用途：输入文本，返回 PAD 三轴与主情绪（由 15 类 PAD 原型最近邻得到）。
 
 请求体：
 
@@ -218,19 +226,20 @@
 
 ```json
 {
-  "emotion": "frustration",
-  "p": -0.52,
-  "a": 0.58,
-  "d": -0.08,
-  "intensity": 0.973075,
-  "latency_ms": 18.234
+  "emotion": "sadness",
+  "p": -0.65,
+  "a": -0.15,
+  "d": -0.35,
+  "intensity": 0.9123,
+  "latency_ms": 22.614
 }
 ```
 
 说明：
 
 - `latency_ms` 为 emotion-server 单次处理耗时。
-- 不做统一阈值截断，保留原始强度分布。
+- 首次请求包含模型加载/下载耗时，后续会明显降低。
+- 服务启动阶段会先完成一次预热推理（若失败，服务启动失败，不做自动回退）。
 
 ## 5.4 `POST /v1/emotion/convert`
 

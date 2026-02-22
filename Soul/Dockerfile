@@ -11,5 +11,5 @@ RUN adduser -D -H appuser
 USER appuser
 WORKDIR /app
 COPY --from=builder /out/app /app/app
-EXPOSE 9010 9011 9012
+EXPOSE 9010 9011
 ENTRYPOINT ["/app/app"]

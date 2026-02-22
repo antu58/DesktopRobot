@@ -132,18 +132,18 @@ services:
 
   emotion-server:
     build:
-      context: .
+      context: ./emotion-server-py
       dockerfile: Dockerfile
-      args:
-        APP: emotion-server
     container_name: emotion-server
     env_file:
       - .env
     environment:
-      EMOTION_HTTP_ADDR: :9012
-      EMOTION_MAX_BODY_BYTES: ${EMOTION_MAX_BODY_BYTES:-65536}
+      EMOTION_MODEL_ID: ${EMOTION_MODEL_ID:-MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7}
+      HF_HOME: /models
     ports:
       - "${EMOTION_HTTP_PORT:-9012}:9012"
+    volumes:
+      - ${EMOTION_MODEL_CACHE_DIR:-./.cache/huggingface}:/models
 
 volumes:
   postgres-data:
