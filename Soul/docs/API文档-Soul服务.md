@@ -88,6 +88,7 @@
 - 同时注入“灵魂人格 vs 目标人物人格”关系快照，指导回复风格（措辞、主动性、边界），不改变工具集合。
 - `recall_memory` 仅在 Mem0 就绪时暴露给模型；Mem0 未就绪时不会触发该分支。
 - `executed_skills` 可能包含 `recall_memory`。
+- 执行门控为二元：阈值锁定期间 `exec_mode=blocked`，其余时刻 `exec_mode=auto_execute`（不再按连续概率衰减决策）。
 
 成功响应：
 
@@ -101,7 +102,7 @@
   "context_summary": "用户持续进行基础事实问答，机器人保持简洁确认式回应。",
   "intent_decision": "fallback_reasoning",
   "exec_mode": "auto_execute",
-  "exec_probability": 0.91
+  "exec_probability": 1
 }
 ```
 
@@ -206,7 +207,7 @@
 - `head_motion_duration_seconds`：当前头部动态动作持续时长（秒）。
 - `emotion_p / emotion_a / emotion_d`：当前灵魂 PAD（调试展示）。
 - `exec_mode`：执行模式（`auto_execute`/`blocked`）。
-- `exec_probability`：当前执行概率（0~1）。
+- `exec_probability`：执行门控值（`1`=执行，`0`=阻断）。
 
 ## 4.3 `POST /session/new`
 

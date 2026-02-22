@@ -265,10 +265,11 @@ func (e *Engine) Update(base domain.PersonalityVector, prev domain.SoulEmotionSt
 	intensity := clamp01(in.UserEmotion.Intensity)
 	k := e.cfg.ImpactBase * ((0.5 + eff.Empathy) * (0.5 + eff.Sensitivity) / (0.7 + eff.Stability))
 	negativePolarity, positivePolarity := emotionPolarity(in.UserEmotion)
+	impactScale := e.emotionImpactScale(in.UserEmotion, intensity, negativePolarity, positivePolarity)
 	impactGain := e.impactGainByPolarity(negativePolarity, positivePolarity)
-	deltaP := intensity * k * impactGain * in.UserEmotion.P
-	deltaA := intensity * k * impactGain * in.UserEmotion.A
-	deltaD := intensity * k * impactGain * (in.UserEmotion.D + 0.2*(eff.Dominance-0.5))
+	deltaP := intensity * impactScale * k * impactGain * in.UserEmotion.P
+	deltaA := intensity * impactScale * k * impactGain * in.UserEmotion.A
+	deltaD := intensity * impactScale * k * impactGain * (in.UserEmotion.D + 0.2*(eff.Dominance-0.5))
 	dNorm := math.Sqrt((deltaP*deltaP + deltaA*deltaA + deltaD*deltaD) / 3)
 	if dNorm > e.cfg.MaxImpactNorm && dNorm > 0 {
 		scale := e.cfg.MaxImpactNorm / dNorm
@@ -388,31 +389,16 @@ func (e *Engine) Update(base domain.PersonalityVector, prev domain.SoulEmotionSt
 }
 
 func (e *Engine) ExecutionProbability(eff domain.PersonalityVector, state domain.SoulEmotionState, base float64, now time.Time) (float64, string) {
-	base = clamp01(base)
-	z := math.Max(math.Abs(state.P), math.Max(math.Abs(state.A), math.Abs(state.D)))
-	traitResilience, traitReactivity := personalityTraits(eff)
-	tau := clamp(0.6-0.2*eff.Sensitivity+0.2*eff.Stability, 0.35, 0.85)
-	alpha := clamp(2.2+2.8*eff.Sensitivity-1.8*eff.Stability, 0.6, 5.5)
-	zn := 0.0
-	if tau < 1 {
-		zn = clamp((z-tau)/(1-tau), 0, 1)
+	_ = eff
+	_ = base
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
-	extremePenalty := e.cfg.ExtremeEta * clamp(0.55+0.90*traitReactivity-0.45*traitResilience, 0.35, 1.30)
-	shockPenalty := e.cfg.ShockXi * clamp(0.55+1.00*traitReactivity-0.35*traitResilience, 0.35, 1.35)
-	g := math.Exp(-(alpha*math.Pow(zn, 3) + extremePenalty*state.ExtremeMemory + shockPenalty*state.ShockLoad))
 	lockUntil := parseOptionalTime(state.LockUntil)
 	if !lockUntil.IsZero() && now.Before(lockUntil) {
-		g *= 0.02
+		return 0, "blocked"
 	}
-	prob := clamp01(base * g)
-
-	// Remove the middle confirm band: mode is now binary (auto_execute / blocked).
-	executeThreshold := clamp(0.36-0.12*traitResilience+0.08*traitReactivity, 0.16, 0.48)
-	mode := "blocked"
-	if prob >= executeThreshold {
-		mode = "auto_execute"
-	}
-	return prob, mode
+	return 1, "auto_execute"
 }
 
 func neutralPAD(v domain.PersonalityVector) (float64, float64, float64) {
@@ -452,6 +438,32 @@ func (e *Engine) impactGainByPolarity(negative, positive float64) float64 {
 	negGain := lerp(1.0, e.cfg.NegativeImpactGain, clamp01(negative))
 	posGain := lerp(1.0, e.cfg.PositiveImpactGain, clamp01(positive))
 	return clamp(negGain*posGain, 0.30, 2.60)
+}
+
+func (e *Engine) emotionImpactScale(sig domain.EmotionSignal, intensity, negativePolarity, positivePolarity float64) float64 {
+	_ = e
+	intensity = clamp01(intensity)
+	padMagnitude := math.Sqrt((sig.P*sig.P + sig.A*sig.A + sig.D*sig.D) / 3)
+	dominantPolarity := clamp01(math.Max(negativePolarity, positivePolarity))
+	emotionalEnergy := clamp01(0.55*intensity + 0.30*padMagnitude + 0.15*dominantPolarity)
+
+	label := strings.ToLower(strings.TrimSpace(sig.Emotion))
+	if label == "" {
+		label = "neutral"
+	}
+	if (label == "neutral" || label == "calm") && emotionalEnergy < 0.42 {
+		return 0.03
+	}
+	switch {
+	case emotionalEnergy < 0.22:
+		return 0.03
+	case emotionalEnergy < 0.35:
+		return 0.08
+	case emotionalEnergy < 0.50:
+		return 0.18
+	default:
+		return 1.0
+	}
 }
 
 func (e *Engine) shockGainByPolarity(negative, positive float64) float64 {

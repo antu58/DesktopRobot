@@ -20,7 +20,7 @@ func TestVectorFromMBTI_INFJ(t *testing.T) {
 	assertNear(t, v.Dominance, 0.33)
 }
 
-func TestExtremeEmotionLowersExecutionProbability(t *testing.T) {
+func TestLowEmotionInputHasMinimalImpact(t *testing.T) {
 	engine := NewEngine(DefaultConfig())
 	base, err := VectorFromMBTI("INFJ")
 	if err != nil {
@@ -28,8 +28,8 @@ func TestExtremeEmotionLowersExecutionProbability(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	baseState := InitialEmotionState(now.Add(-30 * time.Second))
-	neutral := engine.Update(base, baseState, UpdateInput{
+	baseState := InitialEmotionState(now)
+	baseline := engine.Update(base, baseState, UpdateInput{
 		Now:          now,
 		HasUserInput: true,
 		UserEmotion: domain.EmotionSignal{
@@ -41,8 +41,20 @@ func TestExtremeEmotionLowersExecutionProbability(t *testing.T) {
 		},
 	}, 0.95)
 
-	extreme := engine.Update(base, neutral.State, UpdateInput{
-		Now:          now.Add(20 * time.Second),
+	lowEmotion := engine.Update(base, baseState, UpdateInput{
+		Now:          now,
+		HasUserInput: true,
+		UserEmotion: domain.EmotionSignal{
+			Emotion:   "neutral",
+			P:         0.14,
+			A:         0.08,
+			D:         0.03,
+			Intensity: 0.20,
+		},
+	}, 0.95)
+
+	extreme := engine.Update(base, baseState, UpdateInput{
+		Now:          now,
 		HasUserInput: true,
 		UserEmotion: domain.EmotionSignal{
 			Emotion:   "anger",
@@ -53,50 +65,51 @@ func TestExtremeEmotionLowersExecutionProbability(t *testing.T) {
 		},
 	}, 0.95)
 
-	if extreme.ExecProbability >= neutral.ExecProbability {
-		t.Fatalf("expected lower exec probability on extreme emotion, neutral=%.4f extreme=%.4f", neutral.ExecProbability, extreme.ExecProbability)
+	lowImpact := padDeltaNorm(lowEmotion.State, baseline.State)
+	extremeImpact := padDeltaNorm(extreme.State, baseline.State)
+	if extremeImpact <= 0 {
+		t.Fatalf("expected extreme emotion to produce non-zero impact")
 	}
-	if extreme.ExecMode == "confirm_required" || neutral.ExecMode == "confirm_required" {
-		t.Fatalf("confirm_required mode should be disabled, got neutral=%s extreme=%s", neutral.ExecMode, extreme.ExecMode)
+	if lowImpact > extremeImpact*0.15 {
+		t.Fatalf("expected low-emotion impact to be tiny, low=%.6f extreme=%.6f", lowImpact, extremeImpact)
 	}
 }
 
-func TestExecutionProbabilityDiffersByPersonality(t *testing.T) {
+func TestExecutionGateBlocksOnlyWhenLockActive(t *testing.T) {
 	engine := NewEngine(DefaultConfig())
 	now := time.Now().UTC()
 
 	state := domain.SoulEmotionState{
-		P:             -0.42,
-		A:             -0.35,
-		D:             -0.16,
-		ShockLoad:     0.10,
-		ExtremeMemory: 0.34,
+		P:             -0.96,
+		A:             0.98,
+		D:             0.72,
+		ShockLoad:     0.95,
+		ExtremeMemory: 0.90,
 	}
 
-	resilient := domain.PersonalityVector{
-		Empathy:        0.55,
-		Sensitivity:    0.22,
-		Stability:      0.84,
-		Expressiveness: 0.48,
-		Dominance:      0.74,
-	}
-	reactive := domain.PersonalityVector{
-		Empathy:        0.55,
-		Sensitivity:    0.86,
-		Stability:      0.28,
-		Expressiveness: 0.48,
-		Dominance:      0.26,
-	}
+	locked := state
+	locked.LockUntil = now.Add(90 * time.Second).Format(time.RFC3339Nano)
 
-	probResilient, modeResilient := engine.ExecutionProbability(resilient, state, 0.95, now)
-	probReactive, modeReactive := engine.ExecutionProbability(reactive, state, 0.95, now)
+	unlockedProb, unlockedMode := engine.ExecutionProbability(domain.PersonalityVector{}, state, 0.05, now)
+	lockedProb, lockedMode := engine.ExecutionProbability(domain.PersonalityVector{}, locked, 0.95, now)
+	expiredProb, expiredMode := engine.ExecutionProbability(domain.PersonalityVector{}, locked, 0.95, now.Add(2*time.Minute))
 
-	if probResilient <= probReactive {
-		t.Fatalf("expected resilient personality to have higher execution probability, resilient=%.4f reactive=%.4f", probResilient, probReactive)
+	if unlockedProb != 1 || unlockedMode != "auto_execute" {
+		t.Fatalf("expected unlocked state to always execute, got prob=%.2f mode=%s", unlockedProb, unlockedMode)
 	}
-	if modeResilient == "confirm_required" || modeReactive == "confirm_required" {
-		t.Fatalf("confirm_required mode should be disabled, resilient=%s reactive=%s", modeResilient, modeReactive)
+	if lockedProb != 0 || lockedMode != "blocked" {
+		t.Fatalf("expected locked state to block, got prob=%.2f mode=%s", lockedProb, lockedMode)
 	}
+	if expiredProb != 1 || expiredMode != "auto_execute" {
+		t.Fatalf("expected expired lock to recover execution, got prob=%.2f mode=%s", expiredProb, expiredMode)
+	}
+}
+
+func padDeltaNorm(a, b domain.SoulEmotionState) float64 {
+	dp := a.P - b.P
+	da := a.A - b.A
+	dd := a.D - b.D
+	return math.Sqrt((dp*dp + da*da + dd*dd) / 3)
 }
 
 func assertNear(t *testing.T, got, want float64) {

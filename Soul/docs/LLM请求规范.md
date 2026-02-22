@@ -61,7 +61,7 @@ Soul 使用 OpenAI 兼容 `/chat/completions`：
 - snapshot_at: <RFC3339Nano>
 - user_emotion: <label> (intensity=<0~1>)
 - soul_pad: p=<...> a=<...> d=<...>
-- execution_gate: mode=<auto_execute|blocked> probability=<0~1>
+- execution_gate: mode=<auto_execute|blocked> probability=<0|1>
 - emotion_keywords: <comma-separated keywords>
 
 人格关系快照（用于回复风格，不改变工具集合）：
