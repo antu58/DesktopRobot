@@ -189,6 +189,22 @@ type SoulProfile struct {
 	UpdatedAt         string            `json:"updated_at,omitempty"`
 }
 
+type UserProfile struct {
+	ID          int64  `json:"id"`
+	UserID      string `json:"user_id"`
+	UserUUID    string `json:"user_uuid"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+}
+
+type CreateUserPayload struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 type CreateSoulPayload struct {
 	UserID   string `json:"user_id,omitempty"`
 	Name     string `json:"name"`
@@ -199,6 +215,27 @@ type SelectSoulPayload struct {
 	UserID     string `json:"user_id,omitempty"`
 	TerminalID string `json:"terminal_id"`
 	SoulID     string `json:"soul_id"`
+}
+
+type SoulUserRelation struct {
+	ID               int64              `json:"id"`
+	RelationUUID     string             `json:"relation_uuid"`
+	SoulID           string             `json:"soul_id"`
+	RelatedUserID    string             `json:"related_user_id,omitempty"`
+	Appellation      string             `json:"appellation"`
+	RelationToOwner  string             `json:"relation_to_owner"`
+	UserDescription  string             `json:"user_description,omitempty"`
+	PersonalityModel *PersonalityVector `json:"personality_model,omitempty"`
+	CreatedAt        string             `json:"created_at,omitempty"`
+	UpdatedAt        string             `json:"updated_at,omitempty"`
+}
+
+type CreateSoulUserRelationPayload struct {
+	RelatedUserID    string             `json:"related_user_id,omitempty"`
+	Appellation      string             `json:"appellation"`
+	RelationToOwner  string             `json:"relation_to_owner"`
+	UserDescription  string             `json:"user_description,omitempty"`
+	PersonalityModel *PersonalityVector `json:"personality_model,omitempty"`
 }
 
 type EmotionUpdatePayload struct {

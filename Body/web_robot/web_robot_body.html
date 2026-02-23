@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页机器人躯体实现</title>
+    <!-- 使用 Tailwind CSS 以快速实现稳定的结构与布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-screen w-screen overflow-hidden flex bg-gray-100">
+
+    <!-- 左侧区域：三分之一 -->
+    <div class="w-1/3 border-r border-gray-300 flex flex-col bg-white">
+        <!-- 顶部固定高度：机器人表情面板 -->
+        <div class="h-64 border-b border-gray-300 bg-gray-50 shrink-0 p-3">
+            <div class="w-full h-full rounded-xl border border-gray-700 bg-black overflow-hidden">
+                <svg id="faceStage" class="w-full h-full block" viewBox="0 0 1024 512" xmlns="http://www.w3.org/2000/svg" aria-label="robot face">
+                    <rect x="0" y="0" width="1024" height="512" fill="#000"></rect>
+                    <path id="faceLeftEye" fill="#f2f4ff"></path>
+                    <path id="faceRightEye" fill="#f2f4ff"></path>
+                </svg>
+            </div>
+        </div>
+        
+        <!-- 底部滚动区域：配置参数 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            <h3 class="text-lg font-bold mb-4 text-gray-700">配置参数区域</h3>
+            <div class="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
+                <div class="text-sm font-medium text-gray-700">服务地址（固定）</div>
+                <div class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-500 bg-gray-100">已固定为同源代理（当前网页服务）</div>
+                <input id="terminalIdInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" value="web-robot-01" placeholder="terminal_id（必填）" />
+                <input id="userIdInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" value="web_user_20260223_flow" placeholder="user_id（可选）" />
+                <input id="soulHintInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" value="" placeholder="soul_hint（可选）" />
+                <div class="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
+                    <div class="text-sm font-medium text-gray-700">灵魂选择（当前用户）</div>
+                    <div class="flex gap-2">
+                        <select id="soulSelect" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">请先刷新灵魂列表</option>
+                        </select>
+                        <button id="refreshSoulsBtn" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm hover:bg-gray-300 transition-colors">刷新灵魂</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="bindSoulBtn" class="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 transition-colors">选择并绑定</button>
+                        <div id="selectedSoulInfo" class="text-xs text-gray-500 self-center">当前灵魂：未绑定</div>
+                    </div>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
+                    <div class="text-sm font-medium text-gray-700">创建灵魂（当前用户）</div>
+                    <input id="newSoulNameInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" value="" placeholder="灵魂名称（必填）" />
+                    <div class="flex gap-2">
+                        <select id="newSoulMbtiSelect" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="INTJ" selected>INTJ</option>
+                            <option value="INTP">INTP</option>
+                            <option value="ENTJ">ENTJ</option>
+                            <option value="ENTP">ENTP</option>
+                            <option value="INFJ">INFJ</option>
+                            <option value="INFP">INFP</option>
+                            <option value="ENFJ">ENFJ</option>
+                            <option value="ENFP">ENFP</option>
+                            <option value="ISTJ">ISTJ</option>
+                            <option value="ISFJ">ISFJ</option>
+                            <option value="ESTJ">ESTJ</option>
+                            <option value="ESFJ">ESFJ</option>
+                            <option value="ISTP">ISTP</option>
+                            <option value="ISFP">ISFP</option>
+                            <option value="ESTP">ESTP</option>
+                            <option value="ESFP">ESFP</option>
+                        </select>
+                        <button id="createSoulBtn" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 transition-colors">创建灵魂</button>
+                    </div>
+                </div>
+                <div class="flex gap-2">
+                    <button id="connectStateBtn" class="px-3 py-2 rounded-lg bg-blue-500 text-white text-sm hover:bg-blue-600 transition-colors">连接并刷新</button>
+                    <button id="newSessionBtn" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm hover:bg-gray-300 transition-colors">新会话</button>
+                </div>
+                <div id="connectionStatus" class="text-xs text-gray-500">等待连接</div>
+                <div id="activeSessionInfo" class="text-xs text-gray-500">当前会话：-</div>
+                <div class="text-xs text-amber-600">当前页面仅配置意图，不配置技能。</div>
+            </div>
+            <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div class="text-sm font-medium text-gray-700 mb-3">意图配置（仅意图）</div>
+                <div id="intentConfigList" class="space-y-2">
+                    <div class="text-sm text-gray-400">正在加载意图配置...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧区域：三分之二 -->
+    <div class="w-2/3 flex flex-col bg-gray-50 relative">
+        <!-- 右上角日志切换按钮 -->
+        <button id="toggleLogBtn" title="切换日志" class="absolute top-4 right-4 z-10 bg-white p-2.5 rounded-xl shadow-sm border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M4 15h16a1 1 0 001-1V6a1 1 0 00-1-1H4a1 1 0 00-1 1v8a1 1 0 001 1z" />
+            </svg>
+        </button>
+
+        <!-- 上部：可滚动的对话内容展示区域 -->
+        <div class="flex-1 overflow-y-auto p-4">
+            <div id="conversationList" class="flex flex-col space-y-6">
+                <div class="flex">
+                    <div class="bg-white p-4 rounded-2xl rounded-tl-none shadow-sm max-w-xl text-gray-500">
+                        等待连接 Soul 服务...
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部：输入框与按钮区域 -->
+        <div class="border-t border-gray-300 p-4 bg-white shrink-0 flex items-end space-x-3 relative z-10">
+            <!-- 左侧按钮：语音输入 -->
+            <button class="p-3 h-14 w-14 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors flex items-center justify-center shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+            </button>
+
+            <!-- 输入框 -->
+            <textarea
+                id="chatInput"
+                class="flex-1 h-14 resize-none border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" 
+                placeholder="请输入你想对AI说的话，或分配任务..."></textarea>
+            
+            <!-- 右侧按钮区域 -->
+            <div class="flex space-x-3 shrink-0">
+                <button id="sendBtn" class="px-6 py-3 h-14 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors flex items-center justify-center font-medium shadow-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                    发送
+                </button>
+            </div>
+        </div>
+
+        <!-- 底部折叠的日志区域（高度可拖动） -->
+        <div id="logArea" class="bg-gray-900 text-green-400 font-mono text-sm overflow-hidden shrink-0 flex flex-col transition-[height] duration-150 hidden" style="height: 256px;">
+            <!-- 拖动条：拖动改变日志栏高度 -->
+            <div id="logResizeHandle" class="h-2 flex-shrink-0 cursor-ns-resize flex items-center justify-center bg-gray-800 hover:bg-gray-700 active:bg-gray-600 transition-colors group" title="拖动调整高度">
+                <span class="w-12 h-0.5 rounded-full bg-gray-500 group-hover:bg-gray-400"></span>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4 pt-2">
+            <div class="mb-2 text-gray-400 border-b border-gray-700 pb-2 flex justify-between items-center">
+                <span>系统日志</span>
+                <button id="closeLogBtn" class="hover:text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div id="logLines" class="space-y-1">
+                <div>[INIT] 等待连接 Soul soul-server...</div>
+            </div>
+            </div>
+        </div>
+    </div>
+    <script src="./web_robot_body.log-panel.js"></script>
+    <script src="./web_robot_body.face-engine.js"></script>
+    <script src="./web_robot_body.soul-bridge.js"></script>
+    <script src="./web_robot_body.main.js"></script>
+</body>
+</html>

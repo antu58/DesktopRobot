@@ -218,7 +218,7 @@ func (s *Service) HandleChat(ctx context.Context, req domain.ChatRequest) (domai
 		reply := intentReplyByMode(intentResp.Decision.Action, execMode)
 		executedSkills := []string(nil)
 		if strings.TrimSpace(execMode) == "auto_execute" {
-			executedSkills = extractExecutedSkillsFromIntents(intentResp)
+			executedSkills = extractExecutedSkillsFromIntents(intentResp, skillNameSet(s.skillRegistry.GetSkills(req.TerminalID)))
 		}
 		if err := s.memoryService.PersistMessage(ctx, req.SessionID, userID, req.TerminalID, soulID, "assistant", "", "", reply); err != nil {
 			return domain.ChatResponse{}, err
@@ -954,7 +954,7 @@ func intentReplyByMode(intentDecision, execMode string) string {
 	}
 }
 
-func extractExecutedSkillsFromIntents(resp domain.IntentFilterResponse) []string {
+func extractExecutedSkillsFromIntents(resp domain.IntentFilterResponse, allowed map[string]struct{}) []string {
 	if len(resp.Intents) == 0 {
 		return nil
 	}
@@ -968,12 +968,14 @@ func extractExecutedSkillsFromIntents(resp domain.IntentFilterResponse) []string
 		if skill == "" {
 			skill = firstNonEmptyMapString(in.Parameters, "skill")
 		}
-		if skill == "" {
-			skill = inferSkillFromIntentID(in.IntentID)
-		}
 		skill = strings.TrimSpace(skill)
 		if skill == "" {
 			continue
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[skill]; !ok {
+				continue
+			}
 		}
 		if _, ok := seen[skill]; ok {
 			continue
@@ -1000,17 +1002,19 @@ func firstNonEmptyMapString(m map[string]any, key string) string {
 	}
 }
 
-func inferSkillFromIntentID(intentID string) string {
-	switch strings.ToLower(strings.TrimSpace(intentID)) {
-	case "intent_light_control":
-		return "control_light"
-	case "intent_alarm_create":
-		return "create_alarm"
-	case "intent_head_motion":
-		return "set_head_motion"
-	default:
-		return ""
+func skillNameSet(skills []domain.SkillDefinition) map[string]struct{} {
+	if len(skills) == 0 {
+		return nil
 	}
+	out := make(map[string]struct{}, len(skills))
+	for _, sk := range skills {
+		name := strings.TrimSpace(sk.Name)
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
 }
 
 func (s *Service) executeTerminalSkill(ctx context.Context, terminalID, skill string, args json.RawMessage) string {

@@ -3,7 +3,6 @@
 `Soul` 目录包含：
 
 - `soul-server`：主服务（会话编排、LLM 调用、技能调度、摘要压缩）
-- `terminal-web`：调试终端（模拟 skills 上报与执行）
 - `emotion-server`：情感理解子服务（Python + mDeBERTa-XNLI + ONNX Runtime int8，PAD 三轴直推；输出主情绪 + PAD）
 - `intent-filter`：意图筛选子服务（Python，输入意图表 + 命令上下文，输出多意图数组与固定参数结构）
 - `persona-model`：已并入 `soul-server`（MBTI -> 人格向量 T，动态 PAD，执行概率门控）
@@ -11,7 +10,6 @@
 ## 端口（本地默认）
 
 - `soul-server`：`9010`
-- `terminal-web`：`9011`
 - `emotion-server`：`9012`
 - `intent-filter`：`9013`
 - `mem0`：`18000`
@@ -80,8 +78,6 @@ curl -sS -X POST http://127.0.0.1:9013/v1/intents/filter \
 - `POST /v1/chat` 现支持 `keyboard_text` 与 `speech_text`。
 - 主链路增加：用户情绪分析 -> 灵魂 PAD 更新 -> MQTT 下发 `emotion_update` -> intent-filter -> MQTT 下发 `intent_action`。
 - 服务端会按 `EMOTION_TICK_INTERVAL_SECONDS`（默认 3 秒，限制 2~5 秒）执行一次“自然演化 + 持久化 + MQTT emotion_update 下发”，避免端侧情绪显示长时间停留。
-- `terminal-web` 调试页支持快速意图按钮（`/quick-intents` + `/quick-intent`）用于协议联调。
-
 历史数据清理（一次性）：
 
 ```bash

@@ -111,27 +111,6 @@ services:
     ports:
       - "${SOUL_HTTP_PORT}:9010"
 
-  terminal-web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        APP: terminal-web
-    container_name: terminal-web
-    env_file:
-      - .env
-    environment:
-      TERMINAL_WEB_HTTP_ADDR: :9011
-      MQTT_BROKER_URL: tcp://mqtt:1883
-      SOUL_API_BASE_URL: http://soul-server:9010
-    depends_on:
-      soul-server:
-        condition: service_started
-      mqtt:
-        condition: service_started
-    ports:
-      - "${TERMINAL_WEB_HTTP_PORT}:9011"
-
   emotion-server:
     build:
       context: ./emotion-server-py

@@ -85,24 +85,20 @@ compose_up() {
   log "starting Docker services in ${SOUL_DIR}"
   docker compose up -d --build --remove-orphans
 
-  local soul_port terminal_port mem0_port
+  local soul_port mem0_port
   soul_port="$(get_env SOUL_HTTP_PORT)"
-  terminal_port="$(get_env TERMINAL_WEB_HTTP_PORT)"
   mem0_port="$(get_env MEM0_HTTP_PORT)"
   soul_port="${soul_port:-9010}"
-  terminal_port="${terminal_port:-9011}"
   mem0_port="${mem0_port:-18000}"
 
   if ! wait_http "mem0 (optional)" "http://localhost:${mem0_port}/docs"; then
-    log "mem0 optional check skipped; continue with soul-server and terminal-web"
+    log "mem0 optional check skipped; continue with soul-server"
   fi
   wait_http "soul-server" "http://localhost:${soul_port}/healthz" || fail "soul-server health check failed"
-  wait_http "terminal-web" "http://localhost:${terminal_port}/healthz" || fail "terminal-web health check failed"
 
   log "deployment completed"
   log "mem0: http://localhost:${mem0_port}"
   log "soul-server: http://localhost:${soul_port}"
-  log "terminal-web: http://localhost:${terminal_port}"
 }
 
 compose_down() {

@@ -98,6 +98,18 @@ func (s *Service) ResolveOrCreateSoul(ctx context.Context, userID, terminalID, s
 	return s.store.ResolveOrCreateSoul(ctx, userID, terminalID, soulHint)
 }
 
+func (s *Service) CreateUser(ctx context.Context, userID, displayName, description string) (domain.UserProfile, error) {
+	return s.store.CreateUser(ctx, userID, displayName, description)
+}
+
+func (s *Service) ListUsers(ctx context.Context) ([]domain.UserProfile, error) {
+	return s.store.ListUsers(ctx)
+}
+
+func (s *Service) GetUserByID(ctx context.Context, userID string) (domain.UserProfile, error) {
+	return s.store.GetUserByID(ctx, userID)
+}
+
 func (s *Service) ResolveSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
 	return s.store.ResolveSoul(ctx, userID, terminalID, soulHint)
 }
@@ -116,6 +128,14 @@ func (s *Service) GetSoulProfileByID(ctx context.Context, soulID string) (domain
 
 func (s *Service) BindTerminalSoul(ctx context.Context, userID, terminalID, soulID string) error {
 	return s.store.BindTerminalSoul(ctx, userID, terminalID, soulID)
+}
+
+func (s *Service) CreateSoulUserRelation(ctx context.Context, soulID string, payload domain.CreateSoulUserRelationPayload) (domain.SoulUserRelation, error) {
+	return s.store.CreateSoulUserRelation(ctx, soulID, payload)
+}
+
+func (s *Service) ListSoulUserRelations(ctx context.Context, soulID string) ([]domain.SoulUserRelation, error) {
+	return s.store.ListSoulUserRelations(ctx, soulID)
 }
 
 func (s *Service) UpdateSoulEmotionState(ctx context.Context, soulID string, state domain.SoulEmotionState) error {

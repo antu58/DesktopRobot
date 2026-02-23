@@ -62,6 +62,21 @@ func (s *Store) Close() {
 
 func (s *Store) Migrate(ctx context.Context) error {
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id BIGSERIAL PRIMARY KEY,
+			user_id TEXT NOT NULL UNIQUE,
+			user_uuid TEXT NOT NULL UNIQUE DEFAULT (
+				substr(md5(random()::text || clock_timestamp()::text), 1, 8) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 12)
+			),
+			display_name TEXT NOT NULL DEFAULT '',
+			description TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
 		`CREATE TABLE IF NOT EXISTS souls (
 			soul_id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
@@ -74,6 +89,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (user_id, name)
 		);`,
+		`INSERT INTO users(user_id, display_name)
+		VALUES ('demo-user', 'demo-user')
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM souls
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
 		`CREATE TABLE IF NOT EXISTS terminal_soul_bindings (
 			user_id TEXT NOT NULL,
 			terminal_id TEXT NOT NULL,
@@ -139,6 +162,118 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_mem0_async_jobs_status_created ON mem0_async_jobs(status, created_at);`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM sessions
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM messages
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM memory_episode
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM terminal_soul_bindings
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`INSERT INTO users(user_id, display_name)
+		SELECT DISTINCT user_id, user_id
+		FROM mem0_async_jobs
+		WHERE COALESCE(TRIM(user_id), '') <> ''
+		ON CONFLICT (user_id) DO NOTHING;`,
+		`CREATE TABLE IF NOT EXISTS soul_user_relations (
+			id BIGSERIAL PRIMARY KEY,
+			relation_uuid TEXT NOT NULL UNIQUE DEFAULT (
+				substr(md5(random()::text || clock_timestamp()::text), 1, 8) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 4) || '-' ||
+				substr(md5(random()::text || clock_timestamp()::text), 1, 12)
+			),
+			soul_id TEXT NOT NULL REFERENCES souls(soul_id) ON DELETE CASCADE,
+			related_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+			appellation TEXT NOT NULL,
+			relation_to_owner TEXT NOT NULL,
+			user_description TEXT NOT NULL DEFAULT '',
+			personality_model JSONB,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (soul_id, appellation)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_soul_user_relations_soul_created ON soul_user_relations(soul_id, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_soul_user_relations_related_user ON soul_user_relations(related_user_id);`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_souls_user_id_users'
+			) THEN
+				ALTER TABLE souls
+				ADD CONSTRAINT fk_souls_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT;
+			END IF;
+		END
+		$$;`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_terminal_soul_bindings_user_id_users'
+			) THEN
+				ALTER TABLE terminal_soul_bindings
+				ADD CONSTRAINT fk_terminal_soul_bindings_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+			END IF;
+		END
+		$$;`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_sessions_user_id_users'
+			) THEN
+				ALTER TABLE sessions
+				ADD CONSTRAINT fk_sessions_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+			END IF;
+		END
+		$$;`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_messages_user_id_users'
+			) THEN
+				ALTER TABLE messages
+				ADD CONSTRAINT fk_messages_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+			END IF;
+		END
+		$$;`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_memory_episode_user_id_users'
+			) THEN
+				ALTER TABLE memory_episode
+				ADD CONSTRAINT fk_memory_episode_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+			END IF;
+		END
+		$$;`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'fk_mem0_async_jobs_user_id_users'
+			) THEN
+				ALTER TABLE mem0_async_jobs
+				ADD CONSTRAINT fk_mem0_async_jobs_user_id_users
+				FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+			END IF;
+		END
+		$$;`,
 	}
 
 	for _, q := range queries {
@@ -149,11 +284,119 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) ensureUserExists(ctx context.Context, userID string) error {
+	trimmed := strings.TrimSpace(userID)
+	if trimmed == "" {
+		return fmt.Errorf("user_id is required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO users(user_id, display_name)
+		VALUES ($1, $1)
+		ON CONFLICT (user_id) DO NOTHING;
+	`, trimmed)
+	return err
+}
+
+func (s *Store) CreateUser(ctx context.Context, userID, displayName, description string) (domain.UserProfile, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		userID = "user_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = userID
+	}
+	description = strings.TrimSpace(description)
+
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO users(user_id, display_name, description)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO NOTHING;
+	`, userID, displayName, description)
+	if err != nil {
+		return domain.UserProfile{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.UserProfile{}, fmt.Errorf("user_id already exists: %s", userID)
+	}
+	return s.GetUserByID(ctx, userID)
+}
+
+func (s *Store) GetUserByID(ctx context.Context, userID string) (domain.UserProfile, error) {
+	userID = strings.TrimSpace(userID)
+	var out domain.UserProfile
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, user_id, user_uuid, display_name, description, created_at, updated_at
+		FROM users
+		WHERE user_id=$1
+	`, userID).Scan(
+		&out.ID,
+		&out.UserID,
+		&out.UserUUID,
+		&out.DisplayName,
+		&out.Description,
+		&createdAt,
+		&updatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.UserProfile{}, fmt.Errorf("user not found: %s", userID)
+	}
+	if err != nil {
+		return domain.UserProfile{}, err
+	}
+	out.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+	out.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+	return out, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]domain.UserProfile, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, user_uuid, display_name, description, created_at, updated_at
+		FROM users
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.UserProfile, 0, 16)
+	for rows.Next() {
+		var item domain.UserProfile
+		var createdAt time.Time
+		var updatedAt time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.UserUUID,
+			&item.DisplayName,
+			&item.Description,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Store) ResolveOrCreateSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
 	return s.ResolveSoul(ctx, userID, terminalID, soulHint)
 }
 
 func (s *Store) ResolveSoul(ctx context.Context, userID, terminalID, soulHint string) (string, error) {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return "", err
+	}
+
 	if soulID, err := s.getBoundSoul(ctx, userID, terminalID); err != nil {
 		return "", err
 	} else if soulID != "" {
@@ -238,6 +481,19 @@ func (s *Store) matchExistingSoul(ctx context.Context, userID, soulHint string) 
 }
 
 func (s *Store) bindTerminalSoul(ctx context.Context, userID, terminalID, soulID string) error {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
+	}
+	var ownerUserID string
+	if err := s.pool.QueryRow(ctx, `SELECT user_id FROM souls WHERE soul_id=$1`, soulID).Scan(&ownerUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSoulNotFound
+		}
+		return err
+	}
+	if strings.TrimSpace(ownerUserID) != strings.TrimSpace(userID) {
+		return fmt.Errorf("soul %s does not belong to user %s", soulID, userID)
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO terminal_soul_bindings(user_id, terminal_id, soul_id)
 		VALUES ($1, $2, $3)
@@ -252,6 +508,9 @@ func (s *Store) BindTerminalSoul(ctx context.Context, userID, terminalID, soulID
 }
 
 func (s *Store) CreateSoulProfile(ctx context.Context, userID, name, mbtiType string, vector domain.PersonalityVector, state domain.SoulEmotionState, modelVersion string) (domain.SoulProfile, error) {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return domain.SoulProfile{}, err
+	}
 	soulID := "soul_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if modelVersion == "" {
 		modelVersion = "persona-pad-v2"
@@ -388,6 +647,9 @@ func (s *Store) LoadSoulProfilePrompt(ctx context.Context, soulID string) (strin
 }
 
 func (s *Store) SaveMessage(ctx context.Context, sessionID, userID, terminalID, soulID, role, name, toolCallID, content string) error {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO sessions(session_id, user_id, terminal_id, soul_id)
 		VALUES ($1, $2, $3, $4)
@@ -471,6 +733,9 @@ func (s *Store) GetRecentEpisodes(ctx context.Context, soulID string, limit int)
 }
 
 func (s *Store) MarkUserActive(ctx context.Context, sessionID, userID, terminalID, soulID string, at time.Time) error {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
+	}
 	if at.IsZero() {
 		at = time.Now()
 	}
@@ -568,6 +833,9 @@ func (s *Store) GetMessagesSince(ctx context.Context, sessionID string, lastComp
 }
 
 func (s *Store) UpdateSessionSummary(ctx context.Context, sessionID, userID, terminalID, soulID, summary string, lastCompactedMessageID int64) error {
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
+	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE sessions
 		SET summary=$2,
@@ -603,6 +871,9 @@ func (s *Store) InsertMemoryEpisode(ctx context.Context, sessionID, userID, term
 	if strings.TrimSpace(summary) == "" {
 		return nil
 	}
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO memory_episode(session_id, user_id, terminal_id, soul_id, summary)
 		VALUES ($1, $2, $3, $4, $5)
@@ -613,6 +884,9 @@ func (s *Store) InsertMemoryEpisode(ctx context.Context, sessionID, userID, term
 func (s *Store) EnqueueMem0AsyncJob(ctx context.Context, sessionID, userID, terminalID, soulID, summary, triggerSource string) error {
 	if strings.TrimSpace(summary) == "" {
 		return nil
+	}
+	if err := s.ensureUserExists(ctx, userID); err != nil {
+		return err
 	}
 	if triggerSource == "" {
 		triggerSource = "idle_timeout"
@@ -683,6 +957,132 @@ func (s *Store) BuildMemoryContext(ctx context.Context, soulID string) (string, 
 	}
 
 	return profile + "\n近期片段记忆:\n- " + strings.Join(episodes, "\n- "), nil
+}
+
+func (s *Store) CreateSoulUserRelation(ctx context.Context, soulID string, payload domain.CreateSoulUserRelationPayload) (domain.SoulUserRelation, error) {
+	soulID = strings.TrimSpace(soulID)
+	if soulID == "" {
+		return domain.SoulUserRelation{}, fmt.Errorf("soul_id is required")
+	}
+	appellation := strings.TrimSpace(payload.Appellation)
+	if appellation == "" {
+		return domain.SoulUserRelation{}, fmt.Errorf("appellation is required")
+	}
+	relationToOwner := strings.TrimSpace(payload.RelationToOwner)
+	if relationToOwner == "" {
+		return domain.SoulUserRelation{}, fmt.Errorf("relation_to_owner is required")
+	}
+	relatedUserID := strings.TrimSpace(payload.RelatedUserID)
+	if relatedUserID != "" {
+		if _, err := s.GetUserByID(ctx, relatedUserID); err != nil {
+			return domain.SoulUserRelation{}, err
+		}
+	}
+
+	var personalityJSON any
+	if payload.PersonalityModel != nil {
+		raw, err := json.Marshal(payload.PersonalityModel)
+		if err != nil {
+			return domain.SoulUserRelation{}, err
+		}
+		personalityJSON = string(raw)
+	}
+
+	var out domain.SoulUserRelation
+	var personalityRaw []byte
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO soul_user_relations(
+			soul_id, related_user_id, appellation, relation_to_owner, user_description, personality_model
+		)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		RETURNING id, relation_uuid, soul_id, COALESCE(related_user_id, ''), appellation, relation_to_owner, user_description, personality_model, created_at, updated_at
+	`,
+		soulID,
+		nullIfEmpty(relatedUserID),
+		appellation,
+		relationToOwner,
+		strings.TrimSpace(payload.UserDescription),
+		personalityJSON,
+	).Scan(
+		&out.ID,
+		&out.RelationUUID,
+		&out.SoulID,
+		&out.RelatedUserID,
+		&out.Appellation,
+		&out.RelationToOwner,
+		&out.UserDescription,
+		&personalityRaw,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return domain.SoulUserRelation{}, err
+	}
+	if len(personalityRaw) > 0 {
+		var model domain.PersonalityVector
+		if err := json.Unmarshal(personalityRaw, &model); err != nil {
+			return domain.SoulUserRelation{}, err
+		}
+		out.PersonalityModel = &model
+	}
+	out.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+	out.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+	return out, nil
+}
+
+func (s *Store) ListSoulUserRelations(ctx context.Context, soulID string) ([]domain.SoulUserRelation, error) {
+	soulID = strings.TrimSpace(soulID)
+	if soulID == "" {
+		return nil, fmt.Errorf("soul_id is required")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, relation_uuid, soul_id, COALESCE(related_user_id, ''), appellation, relation_to_owner, user_description, personality_model, created_at, updated_at
+		FROM soul_user_relations
+		WHERE soul_id=$1
+		ORDER BY created_at ASC
+	`, soulID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.SoulUserRelation, 0, 8)
+	for rows.Next() {
+		var item domain.SoulUserRelation
+		var personalityRaw []byte
+		var createdAt time.Time
+		var updatedAt time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.RelationUUID,
+			&item.SoulID,
+			&item.RelatedUserID,
+			&item.Appellation,
+			&item.RelationToOwner,
+			&item.UserDescription,
+			&personalityRaw,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(personalityRaw) > 0 {
+			var model domain.PersonalityVector
+			if err := json.Unmarshal(personalityRaw, &model); err != nil {
+				return nil, err
+			}
+			item.PersonalityModel = &model
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func nullIfEmpty(s string) any {

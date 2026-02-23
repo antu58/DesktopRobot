@@ -122,6 +122,29 @@ func main() {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	r.Get("/v1/users", func(w http.ResponseWriter, req *http.Request) {
+		items, err := memorySvc.ListUsers(req.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	})
+	r.Post("/v1/users", func(w http.ResponseWriter, req *http.Request) {
+		var payload domain.CreateUserPayload
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		item, err := memorySvc.CreateUser(req.Context(), payload.UserID, payload.DisplayName, payload.Description)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	r.Get("/v1/souls", func(w http.ResponseWriter, req *http.Request) {
 		userID := strings.TrimSpace(req.URL.Query().Get("user_id"))
 		if userID == "" {
@@ -191,6 +214,40 @@ func main() {
 			"terminal_id": payload.TerminalID,
 			"soul_id":     payload.SoulID,
 		})
+	})
+	r.Get("/v1/souls/{soul_id}/relations", func(w http.ResponseWriter, req *http.Request) {
+		soulID := strings.TrimSpace(chi.URLParam(req, "soul_id"))
+		if soulID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "soul_id is required"})
+			return
+		}
+		items, err := memorySvc.ListSoulUserRelations(req.Context(), soulID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"soul_id": soulID,
+			"items":   items,
+		})
+	})
+	r.Post("/v1/souls/{soul_id}/relations", func(w http.ResponseWriter, req *http.Request) {
+		soulID := strings.TrimSpace(chi.URLParam(req, "soul_id"))
+		if soulID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "soul_id is required"})
+			return
+		}
+		var payload domain.CreateSoulUserRelationPayload
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		item, err := memorySvc.CreateSoulUserRelation(req.Context(), soulID, payload)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
 	})
 	r.Post("/v1/chat", func(w http.ResponseWriter, req *http.Request) {
 		var chatReq domain.ChatRequest
