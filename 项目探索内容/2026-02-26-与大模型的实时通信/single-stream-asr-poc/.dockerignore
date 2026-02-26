@@ -1,0 +1,6 @@
+.git
+.gitignore
+**/.DS_Store
+**/__pycache__
+python/.venv
+models

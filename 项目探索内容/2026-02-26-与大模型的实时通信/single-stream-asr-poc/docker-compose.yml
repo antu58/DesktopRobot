@@ -1,0 +1,48 @@
+services:
+  asr-bridge:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${BUILD_ALL_PROXY:-}
+    restart: unless-stopped
+    environment:
+      FUNASR_MODEL: ${FUNASR_MODEL:-paraformer-zh-streaming}
+      FUNASR_HUB: ${FUNASR_HUB:-ms}
+      FUNASR_DEVICE: ${FUNASR_DEVICE:-cpu}
+      CHUNK_SIZE: ${CHUNK_SIZE:-0,10,5}
+      ENCODER_CHUNK_LOOK_BACK: ${ENCODER_CHUNK_LOOK_BACK:-4}
+      DECODER_CHUNK_LOOK_BACK: ${DECODER_CHUNK_LOOK_BACK:-1}
+      STRICT_MODEL: ${STRICT_MODEL:-1}
+      HTTP_PROXY: ${RUNTIME_HTTP_PROXY:-}
+      HTTPS_PROXY: ${RUNTIME_HTTPS_PROXY:-}
+      ALL_PROXY: ${RUNTIME_ALL_PROXY:-}
+      NO_PROXY: ${RUNTIME_NO_PROXY:-127.0.0.1,localhost,asr-bridge,go-server}
+      MODELSCOPE_CACHE: /models/modelscope
+      HF_HOME: /models/huggingface
+    volumes:
+      - ./models:/models
+    expose:
+      - "2700"
+
+  go-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${BUILD_ALL_PROXY:-}
+    restart: unless-stopped
+    depends_on:
+      - asr-bridge
+    environment:
+      ASR_MODE: ${ASR_MODE:-bridge}
+      ASR_BRIDGE_URL: ws://asr-bridge:2700/ws
+      ICE_UDP_PORT: ${ICE_UDP_PORT:-19188}
+      ICE_PUBLIC_IP: ${ICE_PUBLIC_IP:-127.0.0.1}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-18188}:8088"
+      - "127.0.0.1:${ICE_UDP_PORT:-19188}:${ICE_UDP_PORT:-19188}/udp"

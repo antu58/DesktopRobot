@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Single Stream ASR POC</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+    }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #1e293b 0%, #0b1020 55%, #070b17 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card {
+      width: min(880px, 100%);
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      backdrop-filter: blur(6px);
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 22px;
+    }
+    .sub {
+      color: var(--muted);
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    .row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      color: #0b1020;
+      background: #cbd5e1;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #startBtn {
+      background: #22c55e;
+    }
+    #stopBtn {
+      background: #f59e0b;
+    }
+    #status {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .box {
+      background: #020617;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 12px;
+      min-height: 220px;
+      padding: 12px;
+      overflow: auto;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+    .partial {
+      color: #93c5fd;
+    }
+    .final {
+      color: #f8fafc;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>单路流式 ASR 测试链路</h1>
+    <div class="sub">浏览器麦克风 -> WebRTC DataChannel -> Go 后端 -> 流式 ASR -> 文本回传</div>
+    <div class="row">
+      <button id="startBtn">开始采集</button>
+      <button id="stopBtn" disabled>停止</button>
+      <span id="status">状态: 未连接</span>
+    </div>
+    <div id="transcript" class="box"></div>
+    <div class="meta" id="meta"></div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+    const metaEl = document.getElementById("meta");
+
+    let pc;
+    let dc;
+    let micStream;
+    let audioCtx;
+    let source;
+    let processor;
+    let running = false;
+
+    function setStatus(text) {
+      statusEl.textContent = `状态: ${text}`;
+    }
+
+    function appendLine(text, cls = "final") {
+      const line = document.createElement("div");
+      line.className = cls;
+      line.textContent = text;
+      transcriptEl.appendChild(line);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    function downsampleBuffer(buffer, inputRate, outputRate) {
+      if (outputRate === inputRate) return buffer;
+      const ratio = inputRate / outputRate;
+      const newLength = Math.round(buffer.length / ratio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+        let accum = 0;
+        let count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+          accum += buffer[i];
+          count++;
+        }
+        result[offsetResult] = count > 0 ? accum / count : 0;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
+    }
+
+    function float32ToInt16(float32Array) {
+      const int16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return int16;
+    }
+
+    async function waitForIceGatheringComplete(peer, timeoutMs = 2500) {
+      if (peer.iceGatheringState === "complete") return;
+      await new Promise((resolve) => {
+        const onState = () => {
+          if (peer.iceGatheringState === "complete") {
+            peer.removeEventListener("icegatheringstatechange", onState);
+            resolve();
+          }
+        };
+        peer.addEventListener("icegatheringstatechange", onState);
+        setTimeout(() => {
+          peer.removeEventListener("icegatheringstatechange", onState);
+          resolve();
+        }, timeoutMs);
+      });
+    }
+
+    async function start() {
+      if (running) return;
+      running = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      transcriptEl.innerHTML = "";
+      setStatus("初始化中");
+
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+
+        pc = new RTCPeerConnection({ iceServers: [] });
+        dc = pc.createDataChannel("audio", { ordered: true });
+
+        dc.onopen = () => setStatus("实时传输中");
+        dc.onclose = () => setStatus("数据通道已关闭");
+        dc.onerror = (e) => setStatus(`数据通道错误: ${e.message || "unknown"}`);
+        dc.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.event === "transcript") {
+              if (msg.error) {
+                appendLine(`[warn] ${msg.error}`, "partial");
+              }
+              if (msg.text) {
+                appendLine(msg.text, msg.is_final ? "final" : "partial");
+              }
+              return;
+            }
+          } catch (e) {
+            appendLine(`[raw] ${evt.data}`, "partial");
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          setStatus(`Peer: ${pc.connectionState}`);
+        };
+        pc.oniceconnectionstatechange = () => {
+          setStatus(`ICE: ${pc.iceConnectionState} | Peer: ${pc.connectionState}`);
+        };
+        pc.onicecandidateerror = (evt) => {
+          appendLine(`[ice-error] ${evt.errorText || "unknown"}`, "partial");
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceGatheringComplete(pc);
+
+        const resp = await fetch("/offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pc.localDescription)
+        });
+        if (!resp.ok) {
+          throw new Error(`offer failed: ${resp.status} ${await resp.text()}`);
+        }
+        const answer = await resp.json();
+        await pc.setRemoteDescription({
+          type: answer.type,
+          sdp: answer.sdp
+        });
+
+        metaEl.textContent = `session=${answer.session_id} | asr_mode=${answer.asr_mode} | target_sample_rate=16000`;
+
+        audioCtx = new AudioContext();
+        source = audioCtx.createMediaStreamSource(micStream);
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+        processor.onaudioprocess = (evt) => {
+          if (!dc || dc.readyState !== "open") return;
+          const input = evt.inputBuffer.getChannelData(0);
+          const downsampled = downsampleBuffer(input, audioCtx.sampleRate, 16000);
+          const pcm16 = float32ToInt16(downsampled);
+          dc.send(pcm16.buffer);
+        };
+
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+      } catch (err) {
+        appendLine(`启动失败: ${err.message || err}`, "partial");
+        await stop();
+      }
+    }
+
+    async function stop() {
+      if (!running) return;
+      running = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      try {
+        if (dc && dc.readyState === "open") {
+          dc.send(JSON.stringify({ event: "flush" }));
+        }
+      } catch (_) {}
+
+      if (processor) {
+        processor.disconnect();
+        processor.onaudioprocess = null;
+      }
+      if (source) source.disconnect();
+      if (audioCtx) await audioCtx.close();
+      if (micStream) micStream.getTracks().forEach((t) => t.stop());
+      if (dc) dc.close();
+      if (pc) pc.close();
+
+      processor = null;
+      source = null;
+      audioCtx = null;
+      micStream = null;
+      dc = null;
+      pc = null;
+      setStatus("已停止");
+    }
+
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+  </script>
+</body>
+</html>

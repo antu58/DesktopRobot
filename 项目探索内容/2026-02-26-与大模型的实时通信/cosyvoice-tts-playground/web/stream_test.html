@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CosyVoice 真流式播报测试</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #0b1020;
+      color: #e5e7eb;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .panel {
+      max-width: 960px;
+      margin: 0 auto;
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .muted { color: #94a3b8; font-size: 13px; margin-bottom: 12px; }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .col { flex: 1; min-width: 220px; }
+    textarea, select, input[type="range"] {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #020617;
+      color: #f8fafc;
+      padding: 10px;
+      font-size: 14px;
+    }
+    textarea { min-height: 140px; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #runBtn { background: #22c55e; color: #052e16; }
+    #stopBtn { background: #ef4444; color: #fff; }
+    #status { color: #cbd5e1; font-size: 13px; }
+    #logs {
+      margin-top: 10px;
+      background: #020617;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 13px;
+      min-height: 120px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>真流式播报测试页</h1>
+    <div class="muted">单次请求持续返回 PCM 音频流，前端边接收边播放（非伪流式）。</div>
+
+    <div class="row">
+      <div class="col">
+        <label>clone_id</label>
+        <select id="cloneSelect"></select>
+      </div>
+      <div class="col">
+        <label>语速（0.5 - 2.0）：<span id="speedValue">1.0</span></label>
+        <input id="speedRange" type="range" min="0.5" max="2.0" step="0.1" value="1.0" />
+      </div>
+    </div>
+
+    <label>测试文本</label>
+    <textarea id="textInput">这帮我定一个明天的闹钟，呃不，后天的。</textarea>
+
+    <div class="row">
+      <button id="runBtn">开始真流式</button>
+      <button id="stopBtn">停止</button>
+      <span id="status">状态：初始化中</span>
+    </div>
+
+    <div id="logs"></div>
+  </div>
+
+  <script>
+    const cloneSelect = document.getElementById("cloneSelect");
+    const speedRange = document.getElementById("speedRange");
+    const speedValue = document.getElementById("speedValue");
+    const textInput = document.getElementById("textInput");
+    const runBtn = document.getElementById("runBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const logsEl = document.getElementById("logs");
+
+    let abortCtrl = null;
+    let audioCtx = null;
+    let running = false;
+    let nextPlayTime = 0;
+
+    function setStatus(text) {
+      statusEl.textContent = `状态：${text}`;
+    }
+
+    function log(line) {
+      const now = new Date().toLocaleTimeString();
+      logsEl.textContent += `[${now}] ${line}\n`;
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
+
+    function resetCloneSelect(values) {
+      cloneSelect.innerHTML = "";
+      if (!values.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "暂无 clone_id";
+        cloneSelect.appendChild(opt);
+        return;
+      }
+      for (const id of values) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        cloneSelect.appendChild(opt);
+      }
+    }
+
+    async function loadClones() {
+      const resp = await fetch("/api/voices");
+      if (!resp.ok) throw new Error(`读取 clone 失败: ${resp.status}`);
+      const data = await resp.json();
+      resetCloneSelect(data.clone_voices || []);
+    }
+
+    async function ensureAudioContext() {
+      if (!audioCtx || audioCtx.state === "closed") {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+      }
+      if (nextPlayTime < audioCtx.currentTime) {
+        nextPlayTime = audioCtx.currentTime + 0.05;
+      }
+    }
+
+    function playPcmChunk(u8, sampleRate) {
+      if (!u8 || u8.length < 2) return;
+      const sampleCount = Math.floor(u8.length / 2);
+      if (sampleCount <= 0) return;
+
+      const pcm = new Int16Array(sampleCount);
+      const dv = new DataView(u8.buffer, u8.byteOffset, sampleCount * 2);
+      for (let i = 0; i < sampleCount; i++) {
+        pcm[i] = dv.getInt16(i * 2, true);
+      }
+
+      const float32 = new Float32Array(sampleCount);
+      for (let i = 0; i < sampleCount; i++) {
+        float32[i] = pcm[i] / 32768;
+      }
+
+      const buf = audioCtx.createBuffer(1, sampleCount, sampleRate);
+      buf.copyToChannel(float32, 0);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+
+      if (nextPlayTime < audioCtx.currentTime + 0.02) {
+        nextPlayTime = audioCtx.currentTime + 0.02;
+      }
+      src.start(nextPlayTime);
+      nextPlayTime += buf.duration;
+    }
+
+    async function runTrueStreaming() {
+      if (running) return;
+      const cloneId = cloneSelect.value;
+      if (!cloneId) {
+        setStatus("请先创建并选择 clone_id");
+        return;
+      }
+      const text = textInput.value.trim();
+      if (!text) {
+        setStatus("文本不能为空");
+        return;
+      }
+
+      running = true;
+      runBtn.disabled = true;
+      logsEl.textContent = "";
+      setStatus("建立流式连接中...");
+
+      try {
+        await ensureAudioContext();
+        abortCtrl = new AbortController();
+        const startedAt = performance.now();
+
+        const resp = await fetch("/api/synthesize/clone/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clone_id: cloneId,
+            text,
+            speed: Number(speedRange.value)
+          }),
+          signal: abortCtrl.signal
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`流式请求失败: ${resp.status} ${errText}`);
+        }
+        if (!resp.body) {
+          throw new Error("浏览器不支持流式读取");
+        }
+
+        const sr = Number(resp.headers.get("X-Sample-Rate") || "22050");
+        log(`开始流式接收: clone_id=${cloneId}, sample_rate=${sr}`);
+        setStatus("流式播放中...");
+
+        const reader = resp.body.getReader();
+        let gotFirstChunk = false;
+        let carry = new Uint8Array(0);
+        let chunkCount = 0;
+        let bytesTotal = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.length === 0) continue;
+
+          chunkCount += 1;
+          bytesTotal += value.length;
+          if (!gotFirstChunk) {
+            gotFirstChunk = true;
+            const firstMs = Math.round(performance.now() - startedAt);
+            log(`首包到达: ${firstMs}ms`);
+          }
+
+          const merged = new Uint8Array(carry.length + value.length);
+          merged.set(carry, 0);
+          merged.set(value, carry.length);
+
+          const alignedLen = merged.length - (merged.length % 2);
+          if (alignedLen > 0) {
+            playPcmChunk(merged.subarray(0, alignedLen), sr);
+          }
+          carry = alignedLen < merged.length ? merged.subarray(alignedLen) : new Uint8Array(0);
+        }
+
+        if (carry.length > 1) {
+          playPcmChunk(carry.subarray(0, carry.length - (carry.length % 2)), sr);
+        }
+        log(`流式结束: chunks=${chunkCount}, bytes=${bytesTotal}`);
+        setStatus("完成");
+      } catch (err) {
+        if (err && err.name === "AbortError") {
+          setStatus("已停止");
+          log("已手动停止。");
+        } else {
+          setStatus("失败");
+          log(err.message || "失败");
+        }
+      } finally {
+        running = false;
+        runBtn.disabled = false;
+        abortCtrl = null;
+      }
+    }
+
+    function stopStreaming() {
+      if (abortCtrl) {
+        abortCtrl.abort();
+      }
+      if (audioCtx) {
+        nextPlayTime = audioCtx.currentTime + 0.05;
+      }
+    }
+
+    speedRange.addEventListener("input", () => {
+      speedValue.textContent = Number(speedRange.value).toFixed(1);
+    });
+    runBtn.addEventListener("click", runTrueStreaming);
+    stopBtn.addEventListener("click", stopStreaming);
+
+    (async () => {
+      try {
+        await loadClones();
+        setStatus("就绪");
+      } catch (e) {
+        setStatus(e.message || "初始化失败");
+      }
+    })();
+  </script>
+</body>
+</html>

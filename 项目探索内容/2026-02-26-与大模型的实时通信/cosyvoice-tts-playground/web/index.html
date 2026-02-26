@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CosyVoice TTS Playground</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b1020;
+      color: #e5e7eb;
+      padding: 24px;
+    }
+    .panel {
+      max-width: 1080px;
+      margin: 0 auto;
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+    }
+    .muted {
+      color: #94a3b8;
+      font-size: 13px;
+      margin: 0 0 14px;
+    }
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+    textarea, select, input[type="range"], input[type="text"], input[type="file"] {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #020617;
+      color: #f8fafc;
+      padding: 10px;
+      font-size: 14px;
+    }
+    textarea { min-height: 140px; }
+    .col {
+      flex: 1;
+      min-width: 220px;
+    }
+    .section {
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+      background: #0f172a;
+    }
+    .section h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #22c55e;
+      color: #052e16;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #status {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+    #meta {
+      margin-top: 10px;
+      color: #cbd5e1;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+    .warn {
+      color: #fbbf24;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+    audio { width: 100%; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>CosyVoice 音色测试页</h1>
+    <div class="muted">支持预置音色合成、音色复刻（含 m4a）和 clone_id 复用。流式分片测试页：<a href="/stream-test" target="_blank" style="color:#60a5fa;">/stream-test</a></div>
+
+    <div class="section">
+      <h2>预置音色合成（SFT）</h2>
+      <textarea id="baseTextInput">今天我们正在验证桌面助手的语音能力，这段文本用于测试 CosyVoice 的发音清晰度、语速控制和情绪表达。请你仔细听普通句、并列句和转折句的停顿是否自然，再关注数字与专有名词的读法是否准确。若整体听感连贯、音色稳定，我们就进入下一步实时对话联调。</textarea>
+      <div class="row">
+        <div class="col">
+          <label>音色选择</label>
+          <select id="voiceSelect"></select>
+        </div>
+        <div class="col">
+          <button id="synthesizeBtn">用预置音色合成</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>音色复刻（创建 clone_id）</h2>
+      <div class="row">
+        <div class="col">
+          <label>clone_id（3-64 位，字母/数字/_/-）</label>
+          <input id="cloneIdInput" type="text" value="my_clone_01" />
+        </div>
+        <div class="col">
+          <label>参考音频（支持 wav/mp3/m4a/aac/flac/ogg/webm/mp4）</label>
+          <input id="cloneAudioInput" type="file" accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.webm,.mp4,audio/*" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>prompt_text（与参考音频内容尽量一致）</label>
+          <textarea id="promptTextInput" style="min-height:90px;">你好，我正在测试音色复刻功能。</textarea>
+          <div class="warn">建议参考音频 3-10 秒、单人声、安静环境。</div>
+        </div>
+        <div class="col">
+          <button id="createCloneBtn">创建 / 覆盖 clone_id</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>复刻音色复用</h2>
+      <div class="row">
+        <div class="col">
+          <label>已保存 clone_id</label>
+          <select id="cloneSelect"></select>
+        </div>
+        <div class="col">
+          <label>语速（0.5 - 2.0）: <span id="speedValue">1.0</span></label>
+          <input id="speedRange" type="range" min="0.5" max="2.0" step="0.1" value="1.0" />
+        </div>
+      </div>
+      <textarea id="cloneTextInput">这是一段复刻音色复用测试文本，用于验证音色一致性和可重复使用能力。</textarea>
+      <div class="row">
+        <button id="cloneSynthesizeBtn">用复刻音色合成</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span id="status">状态: 初始化中</span>
+    </div>
+    <audio id="audioPlayer" controls></audio>
+    <div id="meta"></div>
+  </div>
+
+  <script>
+    const voiceSelect = document.getElementById("voiceSelect");
+    const cloneSelect = document.getElementById("cloneSelect");
+    const speedRange = document.getElementById("speedRange");
+    const speedValue = document.getElementById("speedValue");
+    const synthesizeBtn = document.getElementById("synthesizeBtn");
+    const createCloneBtn = document.getElementById("createCloneBtn");
+    const cloneSynthesizeBtn = document.getElementById("cloneSynthesizeBtn");
+    const statusEl = document.getElementById("status");
+    const audioPlayer = document.getElementById("audioPlayer");
+    const metaEl = document.getElementById("meta");
+    const baseTextInput = document.getElementById("baseTextInput");
+    const cloneTextInput = document.getElementById("cloneTextInput");
+    const cloneIdInput = document.getElementById("cloneIdInput");
+    const cloneAudioInput = document.getElementById("cloneAudioInput");
+    const promptTextInput = document.getElementById("promptTextInput");
+
+    function setStatus(text) {
+      statusEl.textContent = `状态: ${text}`;
+    }
+
+    speedRange.addEventListener("input", () => {
+      speedValue.textContent = Number(speedRange.value).toFixed(1);
+    });
+
+    function resetSelect(selectEl, values, emptyText) {
+      selectEl.innerHTML = "";
+      if (!values || values.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = emptyText;
+        selectEl.appendChild(opt);
+        return;
+      }
+      for (const v of values) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        selectEl.appendChild(opt);
+      }
+    }
+
+    async function loadVoices() {
+      const resp = await fetch("/api/voices");
+      if (!resp.ok) throw new Error(`获取音色失败: ${resp.status}`);
+      const data = await resp.json();
+      const baseVoices = data.base_voices || data.voices || [];
+      const cloneVoices = data.clone_voices || [];
+      resetSelect(voiceSelect, baseVoices, "无预置音色");
+      resetSelect(cloneSelect, cloneVoices, "暂无 clone_id");
+      if (!baseVoices || baseVoices.length === 0) {
+        throw new Error("当前模型没有可用音色");
+      }
+    }
+
+    async function handleAudioResponse(resp, selectedVoice) {
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      audioPlayer.src = url;
+      audioPlayer.play().catch(() => {});
+
+      const mode = resp.headers.get("X-Mode") || "";
+      const rawVoice = resp.headers.get("X-Voice") || selectedVoice || "";
+      let voice = rawVoice;
+      try { voice = decodeURIComponent(rawVoice); } catch (_) {}
+      const sr = resp.headers.get("X-Sample-Rate") || "";
+      const dur = resp.headers.get("X-Duration-Sec") || "";
+      const ms = resp.headers.get("X-Elapsed-Ms") || "";
+      metaEl.textContent =
+        `输出信息\n` +
+        `- 模式: ${mode}\n` +
+        `- 音色/clone_id: ${voice}\n` +
+        `- 采样率: ${sr}\n` +
+        `- 音频时长(秒): ${dur}\n` +
+        `- 合成耗时(ms): ${ms}`;
+    }
+
+    async function synthesizeBase() {
+      const text = baseTextInput.value.trim();
+      if (!text) {
+        setStatus("文本不能为空");
+        return;
+      }
+      setStatus("预置音色合成中...");
+      metaEl.textContent = "";
+      synthesizeBtn.disabled = true;
+      try {
+        const resp = await fetch("/api/synthesize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            speaker: voiceSelect.value,
+            speed: Number(speedRange.value)
+          })
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`合成失败: ${resp.status} ${errText}`);
+        }
+        await handleAudioResponse(resp, voiceSelect.value);
+        setStatus("完成");
+      } catch (e) {
+        setStatus(e.message || "失败");
+      } finally {
+        synthesizeBtn.disabled = false;
+      }
+    }
+
+    async function createClone() {
+      const cloneId = cloneIdInput.value.trim();
+      const promptText = promptTextInput.value.trim();
+      const file = cloneAudioInput.files && cloneAudioInput.files[0];
+      if (!cloneId) {
+        setStatus("clone_id 不能为空");
+        return;
+      }
+      if (!promptText) {
+        setStatus("prompt_text 不能为空");
+        return;
+      }
+      if (!file) {
+        setStatus("请先选择参考音频");
+        return;
+      }
+      setStatus("创建 clone_id 中...");
+      createCloneBtn.disabled = true;
+      try {
+        const audioBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const content = String(reader.result || "");
+            const commaIdx = content.indexOf(",");
+            resolve(commaIdx >= 0 ? content.slice(commaIdx + 1) : content);
+          };
+          reader.onerror = () => reject(new Error("读取音频失败"));
+          reader.readAsDataURL(file);
+        });
+
+        const resp = await fetch("/api/clones", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clone_id: cloneId,
+            prompt_text: promptText,
+            audio_filename: file.name || "prompt.m4a",
+            audio_base64: audioBase64
+          })
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`创建失败: ${resp.status} ${errText}`);
+        }
+        await loadVoices();
+        cloneSelect.value = cloneId;
+        setStatus(`clone_id 已保存: ${cloneId}`);
+      } catch (e) {
+        setStatus(e.message || "创建失败");
+      } finally {
+        createCloneBtn.disabled = false;
+      }
+    }
+
+    async function synthesizeClone() {
+      const cloneId = cloneSelect.value;
+      const text = cloneTextInput.value.trim();
+      if (!cloneId) {
+        setStatus("暂无可用 clone_id，请先创建");
+        return;
+      }
+      if (!text) {
+        setStatus("文本不能为空");
+        return;
+      }
+      setStatus("复刻音色合成中...");
+      metaEl.textContent = "";
+      cloneSynthesizeBtn.disabled = true;
+      try {
+        const resp = await fetch("/api/synthesize/clone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            clone_id: cloneId,
+            speed: Number(speedRange.value)
+          })
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`合成失败: ${resp.status} ${errText}`);
+        }
+        await handleAudioResponse(resp, cloneId);
+        setStatus("完成");
+      } catch (e) {
+        setStatus(e.message || "失败");
+      } finally {
+        cloneSynthesizeBtn.disabled = false;
+      }
+    }
+
+    synthesizeBtn.addEventListener("click", synthesizeBase);
+    createCloneBtn.addEventListener("click", createClone);
+    cloneSynthesizeBtn.addEventListener("click", synthesizeClone);
+
+    (async () => {
+      try {
+        await loadVoices();
+        setStatus("就绪");
+      } catch (e) {
+        setStatus(e.message || "初始化失败");
+      }
+    })();
+  </script>
+</body>
+</html>

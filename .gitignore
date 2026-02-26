@@ -1,0 +1,7 @@
+# Local exploration artifacts and downloaded model weights
+项目探索内容/**/models/
+项目探索内容/**/__pycache__/
+项目探索内容/**/.DS_Store
+
+# Personal test recordings
+项目探索内容/2026-02-26-与大模型的实时通信/我的音色.m4a
