@@ -60,9 +60,12 @@
     #startBtn { background: var(--ok); }
     #stopBtn { background: var(--warn); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #status, #meta {
+    #status, #meta, #backendState {
       font-size: 13px;
       color: var(--muted);
+    }
+    #backendState {
+      color: #c4b5fd;
     }
     .box {
       min-height: 220px;
@@ -91,6 +94,7 @@
       <button id="startBtn">开始采集</button>
       <button id="stopBtn" disabled>停止</button>
       <span id="status">状态: 未连接</span>
+      <span id="backendState">后端: 空闲</span>
     </div>
     <div id="meta"></div>
     <div id="transcript" class="box"></div>
@@ -101,6 +105,7 @@
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
     const statusEl = document.getElementById("status");
+    const backendStateEl = document.getElementById("backendState");
     const metaEl = document.getElementById("meta");
     const transcriptEl = document.getElementById("transcript");
     const backendEl = document.getElementById("backendResp");
@@ -113,9 +118,31 @@
     let running = false;
     let pingTimer = null;
     let partialLine = null;
+    const streamLines = new Map();
+    const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+    let wsBackpressureWarned = false;
 
     function setStatus(s) {
       statusEl.textContent = `状态: ${s}`;
+    }
+
+    function setBackendState(s) {
+      backendStateEl.textContent = `后端: ${s}`;
+    }
+
+    function mapBackendStage(stage) {
+      const table = {
+        queued: "排队中",
+        queue_busy: "队列繁忙",
+        thinking: "LLM推理中",
+        streaming: "LLM输出中",
+        completed: "回复完成",
+        interrupting: "准备打断",
+        interrupted: "已打断",
+        timeout: "请求超时",
+        failed: "后端失败"
+      };
+      return table[stage] || stage || "未知";
     }
 
     function appendLine(el, text, cls) {
@@ -124,6 +151,33 @@
       line.textContent = text;
       el.appendChild(line);
       el.scrollTop = el.scrollHeight;
+    }
+
+    function upsertBackendStream(msg) {
+      const requestId = msg.request_id || `req-${Date.now()}`;
+      let line = streamLines.get(requestId);
+      if (!line) {
+        line = document.createElement("div");
+        line.className = "backend";
+        line.dataset.reply = "";
+        backendEl.appendChild(line);
+        streamLines.set(requestId, line);
+      }
+
+      let reply = line.dataset.reply || "";
+      if (msg.delta) {
+        reply += msg.delta;
+      }
+      if (msg.reply && !msg.delta) {
+        reply = msg.reply;
+      }
+      line.dataset.reply = reply;
+      line.textContent = reply;
+
+      if (msg.final) {
+        streamLines.delete(requestId);
+      }
+      backendEl.scrollTop = backendEl.scrollHeight;
     }
 
     function renderAsr(msg) {
@@ -191,7 +245,10 @@
       stopBtn.disabled = false;
       transcriptEl.innerHTML = "";
       backendEl.innerHTML = "";
+      streamLines.clear();
+      wsBackpressureWarned = false;
       partialLine = null;
+      setBackendState("空闲");
 
       try {
         ws = new WebSocket(wsUrl());
@@ -205,8 +262,15 @@
             }
           }, 15000);
         };
-        ws.onerror = () => setStatus("WebSocket错误");
-        ws.onclose = () => setStatus("WebSocket关闭");
+        ws.onerror = (evt) => {
+          setStatus("WebSocket错误");
+          appendLine(backendEl, "[warn] browser websocket error", "warn");
+        };
+        ws.onclose = (evt) => {
+          const closeInfo = `WebSocket关闭 code=${evt.code} reason=${evt.reason || "-"}`;
+          setStatus(closeInfo);
+          appendLine(backendEl, `[warn] ${closeInfo}`, "warn");
+        };
         ws.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data);
@@ -219,7 +283,17 @@
               return;
             }
             if (msg.event === "backend_result") {
-              appendLine(backendEl, msg.reply || "", "backend");
+              upsertBackendStream({ ...msg, final: true });
+              return;
+            }
+            if (msg.event === "backend_stream") {
+              upsertBackendStream(msg);
+              return;
+            }
+            if (msg.event === "backend_state") {
+              const label = mapBackendStage(msg.stage);
+              const extra = msg.detail ? ` (${msg.detail})` : "";
+              setBackendState(`${label}${extra}`);
               return;
             }
             if (msg.event === "filtered") {
@@ -249,6 +323,14 @@
         processor = audioCtx.createScriptProcessor(4096, 1, 1);
         processor.onaudioprocess = (evt) => {
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
+            if (!wsBackpressureWarned) {
+              appendLine(backendEl, `[warn] ws bufferedAmount too high (${ws.bufferedAmount}), dropping audio frames`, "warn");
+              wsBackpressureWarned = true;
+            }
+            return;
+          }
+          wsBackpressureWarned = false;
           const input = evt.inputBuffer.getChannelData(0);
           const downsampled = downsampleBuffer(input, audioCtx.sampleRate, 16000);
           const pcm16 = float32ToInt16(downsampled);
@@ -291,6 +373,7 @@
       micStream = null;
       ws = null;
       setStatus("已停止");
+      setBackendState("空闲");
     }
 
     startBtn.addEventListener("click", start);
