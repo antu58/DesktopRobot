@@ -9,9 +9,17 @@ services:
         ALL_PROXY: ${BUILD_ALL_PROXY:-}
     restart: unless-stopped
     environment:
-      FUNASR_MODEL: ${FUNASR_MODEL:-paraformer-zh-streaming}
+      PIPELINE_MODE: ${PIPELINE_MODE:-vad_segment}
+      FUNASR_MODEL: ${FUNASR_MODEL:-iic/SenseVoiceSmall}
       FUNASR_HUB: ${FUNASR_HUB:-ms}
       FUNASR_DEVICE: ${FUNASR_DEVICE:-cpu}
+      VAD_MODEL: ${VAD_MODEL:-fsmn-vad}
+      VAD_CHUNK_MS: ${VAD_CHUNK_MS:-200}
+      MAX_SEGMENT_MS: ${MAX_SEGMENT_MS:-30000}
+      PRE_ROLL_MS: ${PRE_ROLL_MS:-120}
+      ASR_LANGUAGE: ${ASR_LANGUAGE:-auto}
+      ASR_USE_ITN: ${ASR_USE_ITN:-1}
+      ASR_BATCH_SIZE_S: ${ASR_BATCH_SIZE_S:-60}
       CHUNK_SIZE: ${CHUNK_SIZE:-0,10,5}
       ENCODER_CHUNK_LOOK_BACK: ${ENCODER_CHUNK_LOOK_BACK:-4}
       DECODER_CHUNK_LOOK_BACK: ${DECODER_CHUNK_LOOK_BACK:-1}

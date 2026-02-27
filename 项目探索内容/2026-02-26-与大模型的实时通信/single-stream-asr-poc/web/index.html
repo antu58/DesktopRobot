@@ -120,6 +120,7 @@
     let source;
     let processor;
     let running = false;
+    let activePartialLine = null;
 
     function setStatus(text) {
       statusEl.textContent = `状态: ${text}`;
@@ -130,6 +131,28 @@
       line.className = cls;
       line.textContent = text;
       transcriptEl.appendChild(line);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    function renderTranscript(text, isFinal) {
+      if (!text) return;
+      if (!isFinal) {
+        if (!activePartialLine) {
+          activePartialLine = document.createElement("div");
+          activePartialLine.className = "partial";
+          transcriptEl.appendChild(activePartialLine);
+        }
+        activePartialLine.textContent = text;
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        return;
+      }
+      if (activePartialLine) {
+        activePartialLine.className = "final";
+        activePartialLine.textContent = text;
+        activePartialLine = null;
+      } else {
+        appendLine(text, "final");
+      }
       transcriptEl.scrollTop = transcriptEl.scrollHeight;
     }
 
@@ -187,6 +210,7 @@
       startBtn.disabled = true;
       stopBtn.disabled = false;
       transcriptEl.innerHTML = "";
+      activePartialLine = null;
       setStatus("初始化中");
 
       try {
@@ -214,7 +238,7 @@
                 appendLine(`[warn] ${msg.error}`, "partial");
               }
               if (msg.text) {
-                appendLine(msg.text, msg.is_final ? "final" : "partial");
+                renderTranscript(msg.text, !!msg.is_final);
               }
               return;
             }

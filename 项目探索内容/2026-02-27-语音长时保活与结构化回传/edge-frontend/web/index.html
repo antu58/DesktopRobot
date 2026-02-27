@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Edge Frontend Voice POC</title>
+  <style>
+    :root {
+      --bg: #081426;
+      --panel: #0f1c2f;
+      --text: #dbeafe;
+      --muted: #93a7c3;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --backend: #a7f3d0;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #122645 0%, #081426 65%, #050a14 100%);
+      color: var(--text);
+      min-height: 100vh;
+      box-sizing: border-box;
+      display: grid;
+      place-items: center;
+    }
+    .card {
+      width: min(920px, 100%);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 14px;
+      background: rgba(15, 28, 47, 0.88);
+      padding: 18px;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 21px;
+    }
+    .sub {
+      color: var(--muted);
+      margin-bottom: 14px;
+      font-size: 13px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 13px;
+      cursor: pointer;
+      color: #081426;
+      font-weight: 600;
+    }
+    #startBtn { background: var(--ok); }
+    #stopBtn { background: var(--warn); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status, #meta {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .box {
+      min-height: 220px;
+      max-height: 340px;
+      overflow: auto;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: #050d1b;
+      padding: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      margin-top: 10px;
+    }
+    .asr-final { color: #e5e7eb; }
+    .asr-partial { color: #93c5fd; }
+    .backend { color: var(--backend); }
+    .warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>前端整体节点（采集 + FunASR + 过滤 + 后端回传）</h1>
+    <div class="sub">浏览器仅采集PCM并发送至前端边缘服务，边缘服务识别后再将结构化结果送往Go后端。</div>
+
+    <div class="row">
+      <button id="startBtn">开始采集</button>
+      <button id="stopBtn" disabled>停止</button>
+      <span id="status">状态: 未连接</span>
+    </div>
+    <div id="meta"></div>
+    <div id="transcript" class="box"></div>
+    <div id="backendResp" class="box"></div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const metaEl = document.getElementById("meta");
+    const transcriptEl = document.getElementById("transcript");
+    const backendEl = document.getElementById("backendResp");
+
+    let ws = null;
+    let micStream = null;
+    let audioCtx = null;
+    let source = null;
+    let processor = null;
+    let running = false;
+    let pingTimer = null;
+    let partialLine = null;
+
+    function setStatus(s) {
+      statusEl.textContent = `状态: ${s}`;
+    }
+
+    function appendLine(el, text, cls) {
+      const line = document.createElement("div");
+      line.className = cls;
+      line.textContent = text;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function renderAsr(msg) {
+      const label = `[${msg.language}|${msg.emotion}|${msg.audio_event}|final=${msg.final}] `;
+      const text = `${label}${msg.text || ""}`;
+      if (!msg.final) {
+        if (!partialLine) {
+          partialLine = document.createElement("div");
+          partialLine.className = "asr-partial";
+          transcriptEl.appendChild(partialLine);
+        }
+        partialLine.textContent = text;
+      } else {
+        if (partialLine) {
+          partialLine.className = "asr-final";
+          partialLine.textContent = text;
+          partialLine = null;
+        } else {
+          appendLine(transcriptEl, text, "asr-final");
+        }
+      }
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    function downsampleBuffer(buffer, inputRate, outputRate) {
+      if (outputRate === inputRate) return buffer;
+      const ratio = inputRate / outputRate;
+      const newLength = Math.round(buffer.length / ratio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+        let accum = 0;
+        let count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+          accum += buffer[i];
+          count++;
+        }
+        result[offsetResult] = count > 0 ? accum / count : 0;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
+    }
+
+    function float32ToInt16(float32Array) {
+      const int16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return int16;
+    }
+
+    function wsUrl() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${location.host}/ws/client`;
+    }
+
+    async function start() {
+      if (running) return;
+      running = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      transcriptEl.innerHTML = "";
+      backendEl.innerHTML = "";
+      partialLine = null;
+
+      try {
+        ws = new WebSocket(wsUrl());
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          setStatus("WebSocket已连接");
+          pingTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ event: "ping" }));
+            }
+          }, 15000);
+        };
+        ws.onerror = () => setStatus("WebSocket错误");
+        ws.onclose = () => setStatus("WebSocket关闭");
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.event === "status") {
+              metaEl.textContent = `session=${msg.session_id || "-"} backend_connected=${msg.backend_connected}`;
+              return;
+            }
+            if (msg.event === "asr") {
+              renderAsr(msg);
+              return;
+            }
+            if (msg.event === "backend_result") {
+              appendLine(backendEl, msg.reply || "", "backend");
+              return;
+            }
+            if (msg.event === "filtered") {
+              appendLine(backendEl, `[filtered] ${msg.reason}: ${msg.text || ""}`, "warn");
+              return;
+            }
+            if (msg.event === "warn") {
+              appendLine(backendEl, `[warn] ${msg.message || ""}`, "warn");
+              return;
+            }
+          } catch (err) {
+            appendLine(backendEl, `[raw] ${evt.data}`, "warn");
+          }
+        };
+
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+        audioCtx = new AudioContext();
+        source = audioCtx.createMediaStreamSource(micStream);
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (evt) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          const input = evt.inputBuffer.getChannelData(0);
+          const downsampled = downsampleBuffer(input, audioCtx.sampleRate, 16000);
+          const pcm16 = float32ToInt16(downsampled);
+          ws.send(pcm16.buffer);
+        };
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+      } catch (err) {
+        appendLine(backendEl, `启动失败: ${err.message || err}`, "warn");
+        await stop();
+      }
+    }
+
+    async function stop() {
+      if (!running) return;
+      running = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ event: "flush" }));
+        }
+      } catch (_) {}
+      if (pingTimer) clearInterval(pingTimer);
+      pingTimer = null;
+
+      if (processor) {
+        processor.disconnect();
+        processor.onaudioprocess = null;
+      }
+      if (source) source.disconnect();
+      if (audioCtx) await audioCtx.close();
+      if (micStream) micStream.getTracks().forEach((t) => t.stop());
+      if (ws) ws.close();
+
+      processor = null;
+      source = null;
+      audioCtx = null;
+      micStream = null;
+      ws = null;
+      setStatus("已停止");
+    }
+
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+  </script>
+</body>
+</html>

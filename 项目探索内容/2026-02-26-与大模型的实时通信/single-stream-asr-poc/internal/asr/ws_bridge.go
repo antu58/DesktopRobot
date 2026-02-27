@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,6 +13,11 @@ import (
 type WSBridgeEngine struct {
 	BaseURL string
 }
+
+const (
+	bridgeDialMaxAttempts = 45
+	bridgeDialRetryDelay  = 1 * time.Second
+)
 
 func (e *WSBridgeEngine) Name() string {
 	return "ws-bridge"
@@ -31,9 +37,23 @@ func (e *WSBridgeEngine) NewStream(sessionID string, onResult func(Result)) (Str
 	q.Set("session_id", sessionID)
 	u.RawQuery = q.Encode()
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	var conn *websocket.Conn
+	for attempt := 1; attempt <= bridgeDialMaxAttempts; attempt++ {
+		conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+		if err == nil {
+			break
+		}
+		if attempt < bridgeDialMaxAttempts {
+			time.Sleep(bridgeDialRetryDelay)
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("connect ASR bridge failed: %w", err)
+		return nil, fmt.Errorf(
+			"connect ASR bridge failed after %d attempts (%s): %w",
+			bridgeDialMaxAttempts,
+			bridgeDialRetryDelay,
+			err,
+		)
 	}
 
 	s := &wsBridgeStream{

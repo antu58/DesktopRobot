@@ -1,0 +1,51 @@
+services:
+  go-llm:
+    build:
+      context: ./go-llm-backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: ${BACKEND_PORT_INNER:-8090}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-18090}:8090"
+
+  edge-frontend:
+    build:
+      context: ./edge-frontend
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${BUILD_ALL_PROXY:-}
+    restart: unless-stopped
+    depends_on:
+      - go-llm
+    environment:
+      BACKEND_WS_URL: ${BACKEND_WS_URL:-ws://go-llm:8090/ws/edge}
+      BACKEND_REQ_TIMEOUT_S: ${BACKEND_REQ_TIMEOUT_S:-8}
+      BACKEND_CONN_TIMEOUT_S: ${BACKEND_CONN_TIMEOUT_S:-8}
+      BACKEND_RECONNECT_S: ${BACKEND_RECONNECT_S:-1.5}
+      STRICT_MODEL: ${STRICT_MODEL:-1}
+      FUNASR_MODEL: ${FUNASR_MODEL:-iic/SenseVoiceSmall}
+      VAD_MODEL: ${VAD_MODEL:-fsmn-vad}
+      FUNASR_HUB: ${FUNASR_HUB:-ms}
+      FUNASR_DEVICE: ${FUNASR_DEVICE:-cpu}
+      VAD_CHUNK_MS: ${VAD_CHUNK_MS:-200}
+      MAX_SEGMENT_MS: ${MAX_SEGMENT_MS:-30000}
+      PRE_ROLL_MS: ${PRE_ROLL_MS:-120}
+      ASR_LANGUAGE: ${ASR_LANGUAGE:-auto}
+      ASR_USE_ITN: ${ASR_USE_ITN:-1}
+      ASR_BATCH_SIZE_S: ${ASR_BATCH_SIZE_S:-60}
+      SUBMIT_MIN_TEXT_CHARS: ${SUBMIT_MIN_TEXT_CHARS:-2}
+      SUBMIT_REQUIRE_SPEECH: ${SUBMIT_REQUIRE_SPEECH:-1}
+      SUBMIT_MIN_INTERVAL_MS: ${SUBMIT_MIN_INTERVAL_MS:-600}
+      MODELSCOPE_CACHE: /models/modelscope
+      HF_HOME: /models/huggingface
+      HTTP_PROXY: ${RUNTIME_HTTP_PROXY:-}
+      HTTPS_PROXY: ${RUNTIME_HTTPS_PROXY:-}
+      ALL_PROXY: ${RUNTIME_ALL_PROXY:-}
+      NO_PROXY: ${RUNTIME_NO_PROXY:-127.0.0.1,localhost,edge-frontend,go-llm}
+    volumes:
+      - ./models:/models
+    ports:
+      - "127.0.0.1:${WEB_PORT:-18288}:8080"

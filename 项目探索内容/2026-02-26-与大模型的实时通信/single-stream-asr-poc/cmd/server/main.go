@@ -68,7 +68,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":     "ok",
+			"asr_mode":   s.asrMode,
+			"bridge_url": s.bridgeURL,
+		})
 	})
 	mux.HandleFunc("/offer", s.handleOffer)
 

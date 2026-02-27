@@ -5,8 +5,9 @@
 1. [今日验证结论](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/2026-02-26-验证总结.md)
 2. [技术方案选型记录](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/技术方案选型记录.md)
 3. [完整技术方案：实时引擎与双工作流](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/完整技术方案-实时引擎与双工作流.md)
-4. [单路流式 ASR POC](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/single-stream-asr-poc/README.md)
-5. [CosyVoice TTS Playground](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/cosyvoice-tts-playground/README.md)
+4. [Realtime Text LLM 与视频感知方案沉淀](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/2026-02-26-Realtime-Text-LLM与视频感知方案沉淀.md)
+5. [单路流式 ASR POC](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/single-stream-asr-poc/README.md)
+6. [CosyVoice TTS Playground](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/cosyvoice-tts-playground/README.md)
 
 ## 当日产出
 

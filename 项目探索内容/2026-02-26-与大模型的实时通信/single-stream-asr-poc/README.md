@@ -1,10 +1,10 @@
 # Single Stream ASR POC
 
-在探索目录中构建的单路流式 ASR 测试链路：
+在探索目录中构建的单路 ASR 测试链路：
 
 - 浏览器：采集麦克风，降采样为 `16kHz PCM16LE`，通过 `WebRTC DataChannel` 推流
 - Go 服务：处理 WebRTC 信令与会话，接收音频分片并转发给流式 ASR
-- ASR：默认通过 Python WebSocket 侧车（FunASR）实时识别，文本再经 DataChannel 回传前端
+- ASR：默认通过 Python WebSocket 侧车（FunASR）执行 `VAD 分段 + 段级识别`，文本再经 DataChannel 回传前端
 
 ## 目录结构
 
@@ -26,7 +26,7 @@ single-stream-asr-poc/
 
 ## 运行步骤
 
-### 1) 启动 Python ASR 侧车（FunASR 实时识别）
+### 1) 启动 Python ASR 侧车（默认：VAD 分段 + 中英混说）
 
 ```bash
 cd /Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/single-stream-asr-poc/python
@@ -38,8 +38,19 @@ pip install -r requirements.txt
 配置 FunASR 模型（示例）：
 
 ```bash
-export FUNASR_MODEL=paraformer-zh-streaming
+export PIPELINE_MODE=vad_segment
+export FUNASR_MODEL=iic/SenseVoiceSmall
+export VAD_MODEL=fsmn-vad
+export ASR_LANGUAGE=auto
 export FUNASR_HUB=ms
+uvicorn asr_bridge_funasr:app --host 127.0.0.1 --port 2700
+```
+
+如需回退到原流式模式：
+
+```bash
+export PIPELINE_MODE=streaming
+export FUNASR_MODEL=paraformer-zh-streaming
 uvicorn asr_bridge_funasr:app --host 127.0.0.1 --port 2700
 ```
 
@@ -82,9 +93,9 @@ cd /Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与
 ```
 
 - 默认固定 `WEB_PORT=18188` 并映射到容器 `8088`。
-- 默认 `ASR_MODE=bridge` + `STRICT_MODEL=1`：强制使用真实流式 ASR，不使用 mock。
+- 默认 `ASR_MODE=bridge` + `STRICT_MODEL=1`：强制使用真实 ASR，不使用 mock。
 - 脚本默认注入本地代理（宿主机 `127.0.0.1:7897`，容器内 `host.docker.internal:7897`）。
-- 默认使用 `FUNASR_MODEL=paraformer-zh-streaming`（可通过环境变量覆盖）。
+- 默认使用 `PIPELINE_MODE=vad_segment` + `FUNASR_MODEL=iic/SenseVoiceSmall`（可通过环境变量覆盖）。
 - 默认固定 `ICE_UDP_PORT=19188`，并映射同名 UDP 端口用于 WebRTC ICE。
 
 ### 2) 访问
@@ -111,8 +122,16 @@ single-stream-asr-poc/models/
 
 然后重启：
 
+`VAD 分段 + 多语言（推荐）`：
+
 ```bash
-FUNASR_MODEL=paraformer-zh-streaming FUNASR_HUB=ms ASR_MODE=bridge STRICT_MODEL=1 ./deploy-docker.sh
+PIPELINE_MODE=vad_segment FUNASR_MODEL=iic/SenseVoiceSmall VAD_MODEL=fsmn-vad ASR_LANGUAGE=auto FUNASR_HUB=ms ASR_MODE=bridge STRICT_MODEL=1 ./deploy-docker.sh
+```
+
+`流式中文（低延迟）`：
+
+```bash
+PIPELINE_MODE=streaming FUNASR_MODEL=paraformer-zh-streaming FUNASR_HUB=ms ASR_MODE=bridge STRICT_MODEL=1 ./deploy-docker.sh
 ```
 
 如果模型加载失败，`asr-bridge` 会启动失败（严格模式），不会回退到 mock。
