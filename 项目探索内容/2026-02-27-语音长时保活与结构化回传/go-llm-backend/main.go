@@ -56,13 +56,25 @@ type openAIMessage struct {
 
 type openAIStreamChunk struct {
 	Choices []struct {
-		Delta struct {
-			Content string `json:"content"`
-		} `json:"delta"`
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
+		Delta        openAITextCarrier `json:"delta"`
+		Message      openAITextCarrier `json:"message"`
 		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+type openAITextCarrier struct {
+	Content    json.RawMessage `json:"content"`
+	Text       json.RawMessage `json:"text"`
+	OutputText json.RawMessage `json:"output_text"`
+}
+
+type openAINonStreamResponse struct {
+	Choices []struct {
+		Message openAITextCarrier `json:"message"`
+		Text    json.RawMessage   `json:"text"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -178,19 +190,7 @@ func (b *llmBackend) streamReply(ctx context.Context, req llmRequest, onDelta fu
 		Messages: messages,
 		Stream:   true,
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, b.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := b.client.Do(httpReq)
+	resp, err := b.doChatCompletion(ctx, payload)
 	if err != nil {
 		return "", err
 	}
@@ -225,9 +225,9 @@ func (b *llmBackend) streamReply(ctx context.Context, req llmRequest, onDelta fu
 		if len(chunk.Choices) == 0 {
 			continue
 		}
-		piece := chunk.Choices[0].Delta.Content
+		piece := extractTextFromCarrier(chunk.Choices[0].Delta)
 		if piece == "" {
-			piece = chunk.Choices[0].Message.Content
+			piece = extractTextFromCarrier(chunk.Choices[0].Message)
 		}
 		if piece == "" {
 			continue
@@ -245,10 +245,121 @@ func (b *llmBackend) streamReply(ctx context.Context, req llmRequest, onDelta fu
 
 	reply := sb.String()
 	if strings.TrimSpace(reply) == "" {
-		return "", fmt.Errorf("empty llm response")
+		log.Printf("stream produced empty content, fallback to non-stream: session_id=%s request_id=%s", req.SessionID, req.RequestID)
+		fallbackReply, err := b.nonStreamReply(ctx, payload.Model, payload.Messages)
+		if err != nil {
+			return "", fmt.Errorf("empty llm response (stream) and fallback failed: %w", err)
+		}
+		reply = fallbackReply
+		if onDelta != nil {
+			if err := onDelta(reply); err != nil {
+				return "", err
+			}
+		}
 	}
 	b.memory.appendTurn(req.SessionID, userContent, reply)
 	return reply, nil
+}
+
+func (b *llmBackend) doChatCompletion(ctx context.Context, payload openAIRequest) (*http.Response, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, b.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	return b.client.Do(httpReq)
+}
+
+func (b *llmBackend) nonStreamReply(ctx context.Context, model string, messages []openAIMessage) (string, error) {
+	resp, err := b.doChatCompletion(ctx, openAIRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("openai status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var parsed openAINonStreamResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("invalid non-stream response: %w", err)
+	}
+	if parsed.Error != nil {
+		return "", fmt.Errorf("openai error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("empty non-stream choices")
+	}
+
+	reply := extractTextFromCarrier(parsed.Choices[0].Message)
+	if reply == "" {
+		reply = extractTextFromRaw(parsed.Choices[0].Text)
+	}
+	if strings.TrimSpace(reply) == "" {
+		return "", fmt.Errorf("empty llm response")
+	}
+	return reply, nil
+}
+
+func extractTextFromCarrier(carrier openAITextCarrier) string {
+	if s := extractTextFromRaw(carrier.Content); s != "" {
+		return s
+	}
+	if s := extractTextFromRaw(carrier.Text); s != "" {
+		return s
+	}
+	return extractTextFromRaw(carrier.OutputText)
+}
+
+func extractTextFromRaw(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal([]byte(trimmed), &v); err != nil {
+		return ""
+	}
+	return extractTextFromAny(v)
+}
+
+func extractTextFromAny(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		var sb strings.Builder
+		for _, item := range t {
+			sb.WriteString(extractTextFromAny(item))
+		}
+		return sb.String()
+	case map[string]any:
+		for _, key := range []string{"text", "content", "output_text", "value"} {
+			if val, ok := t[key]; ok {
+				if s := extractTextFromAny(val); s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
 }
 
 const (

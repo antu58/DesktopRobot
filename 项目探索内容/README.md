@@ -12,3 +12,4 @@
 2. [完整技术方案：实时引擎与双工作流](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/完整技术方案-实时引擎与双工作流.md)
 3. [技术方案选型记录（持续更新）](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/技术方案选型记录.md)
 4. [今日验证结论（2026-02-26）](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-26-与大模型的实时通信/2026-02-26-验证总结.md)
+5. [2026-02-27 视频识别服务网页测试](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-27-视频识别服务网页测试/README.md)

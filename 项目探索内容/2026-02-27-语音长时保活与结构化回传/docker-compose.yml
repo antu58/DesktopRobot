@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     env_file:
       - ../../Soul/.env
+      - ./llm.override.env
     environment:
       PORT: ${BACKEND_PORT_INNER:-8090}
       LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-90}

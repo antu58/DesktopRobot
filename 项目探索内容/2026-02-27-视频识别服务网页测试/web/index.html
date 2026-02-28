@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>视频识别日志测试</title>
+  <style>
+    :root {
+      --bg: #091121;
+      --panel: #111c33;
+      --line: rgba(148, 163, 184, 0.25);
+      --text: #dbeafe;
+      --muted: #9fb2cd;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 18px;
+      color: var(--text);
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top, #17305a 0%, var(--bg) 60%, #050b16 100%);
+    }
+    .root {
+      max-width: 1320px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(17, 28, 51, 0.88);
+      padding: 14px;
+    }
+    h1 { margin: 0 0 10px 0; font-size: 20px; }
+    .sub { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+    .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 8px 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #startBtn { background: var(--ok); color: #06210f; }
+    #stopBtn { background: var(--warn); color: #2f1b04; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status, #meta { font-size: 13px; color: var(--muted); }
+    video {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #000;
+    }
+    .log {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #09152a;
+      min-height: 580px;
+      max-height: 72vh;
+      overflow: auto;
+      padding: 10px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    @media (max-width: 980px) {
+      .root { grid-template-columns: 1fr; }
+      .log { min-height: 320px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="root">
+    <section class="card">
+      <h1>摄像头实时画面</h1>
+      <div class="sub">每秒上送 1 帧。后端执行：YOLO + OCR + 人物跟踪 + 人脸特征记忆 + 关键事件状态机。</div>
+      <div class="row">
+        <button id="startBtn">开始</button>
+        <button id="stopBtn" disabled>停止</button>
+        <span id="status">状态: 未连接</span>
+      </div>
+      <div id="meta"></div>
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas" width="960" height="540" style="display:none"></canvas>
+      <div class="hint">提示：日志只在“新关键事件”发生时追加，不会每帧刷屏。</div>
+    </section>
+
+    <section class="card">
+      <h1>识别摘要日志（时间序）</h1>
+      <div id="logBox" class="log"></div>
+    </section>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const metaEl = document.getElementById("meta");
+    const videoEl = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const logBox = document.getElementById("logBox");
+
+    let ws = null;
+    let stream = null;
+    let timer = null;
+    let running = false;
+    let reconnectTimer = null;
+    let reconnectCount = 0;
+    const FPS_MS = 1000;
+
+    function wsUrl() {
+      const p = location.protocol === "https:" ? "wss:" : "ws:";
+      return `${p}//${location.host}/ws/vision`;
+    }
+
+    function setStatus(s) {
+      statusEl.textContent = `状态: ${s}`;
+    }
+
+    function fmtTime(tsMs) {
+      const d = new Date(tsMs);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+
+    function appendLog(text) {
+      const line = document.createElement("div");
+      line.textContent = text;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function connectWs() {
+      if (!running) return;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      ws = new WebSocket(wsUrl());
+      ws.onopen = () => {
+        reconnectCount = 0;
+        setStatus("WebSocket已连接");
+      };
+      ws.onclose = (evt) => {
+        setStatus(`连接关闭 code=${evt.code}`);
+        if (!running) return;
+        const wait = Math.min(5000, 1000 + reconnectCount * 700);
+        reconnectCount += 1;
+        appendLog(`[${fmtTime(Date.now())}] 连接断开，${wait}ms后重连...`);
+        reconnectTimer = setTimeout(connectWs, wait);
+      };
+      ws.onerror = () => setStatus("WebSocket错误");
+      ws.onmessage = (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch (_) { return; }
+        if (!msg || !msg.event) return;
+
+        if (msg.event === "status") {
+          metaEl.textContent = `session=${msg.session_id || "-"} device=${msg.device || "-"} vlm=${msg.vlm_model || "-"}`;
+          appendLog(`[${fmtTime(Date.now())}] 服务已连接`);
+          return;
+        }
+        if (msg.event === "analysis") {
+          metaEl.textContent = `people=${msg.people_count ?? "-"} score=${msg.change_score ?? "-"} keyframe=${msg.is_keyframe ? "Y" : "N"} latency=${msg.latency_ms ?? "-"}ms`;
+          const logs = Array.isArray(msg.new_logs) ? msg.new_logs : [];
+          for (const item of logs) {
+            appendLog(`[${fmtTime(item.ts_ms || Date.now())}] ${item.text || ""}`);
+          }
+          return;
+        }
+        if (msg.event === "error") {
+          appendLog(`[${fmtTime(Date.now())}] [error] ${msg.error || "unknown"}`);
+        }
+      };
+    }
+
+    function captureAndSend() {
+      if (!running || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+      const targetW = 960;
+      const ratio = videoEl.videoHeight / videoEl.videoWidth;
+      const targetH = Math.max(256, Math.round(targetW * ratio));
+      canvas.width = targetW;
+      canvas.height = targetH;
+      ctx.drawImage(videoEl, 0, 0, targetW, targetH);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.76);
+      ws.send(JSON.stringify({ type: "frame", ts_ms: Date.now(), image: dataUrl }));
+    }
+
+    async function start() {
+      if (running) return;
+      running = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      logBox.innerHTML = "";
+      setStatus("初始化中");
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoEl.srcObject = stream;
+
+        connectWs();
+
+        timer = setInterval(captureAndSend, FPS_MS);
+      } catch (err) {
+        setStatus(`启动失败: ${err.message || err}`);
+        await stop();
+      }
+    }
+
+    async function stop() {
+      if (!running) return;
+      running = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (ws) {
+        try { ws.close(); } catch (_) {}
+      }
+      ws = null;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+      stream = null;
+      videoEl.srcObject = null;
+      setStatus("已停止");
+    }
+
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+  </script>
+</body>
+</html>
