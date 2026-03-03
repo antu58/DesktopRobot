@@ -1,4 +1,6 @@
 # Local exploration artifacts and downloaded model weights
+.tmp/
+models/
 项目探索内容/**/models/
 项目探索内容/**/__pycache__/
 项目探索内容/**/.DS_Store
