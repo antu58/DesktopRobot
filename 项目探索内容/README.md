@@ -15,3 +15,4 @@
 5. [2026-02-27 视频识别服务网页测试](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-27-视频识别服务网页测试/README.md)
 6. [2026-02-28 千问 VL 模型使用探索](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-28-千问VL模型使用探索/README.md)
 7. [2026-02-28 实时多模态助手完整方案沉淀](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-28-实时多模态助手完整方案沉淀/README.md)
+8. [2026-02-28 端侧采集 + 云端分析 + LLM API 混合架构（初步方案）](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-28-实时多模态助手完整方案沉淀/2026-02-28-端侧采集-云端分析-LLMAPI混合架构-初步方案.md)
