@@ -1,0 +1,14 @@
+services:
+  web-chat:
+    build:
+      context: ./web_chat
+      dockerfile: Dockerfile
+    container_name: qwen35-web-chat
+    ports:
+      - "127.0.0.1:18080:18080"
+    environment:
+      WEB_CHAT_HOST: "0.0.0.0"
+      WEB_CHAT_PORT: "18080"
+      MODEL_BASE_URL: "http://host.docker.internal:8000/v1"
+      MODEL_NAME: "Qwen3.5-0.8B-Q4_K_M.gguf"
+    restart: unless-stopped

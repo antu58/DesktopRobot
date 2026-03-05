@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qwen3.5-0.8B 本地能力测试</title>
+  <style>
+    :root {
+      --bg: #f2eee8;
+      --panel: #fffaf3;
+      --ink: #1f1f1f;
+      --sub: #595550;
+      --user: #0f766e;
+      --assistant: #92400e;
+      --accent: #0f766e;
+      --border: #ded6c9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 10%, #fff8ec 0, transparent 38%),
+        radial-gradient(circle at 90% 20%, #efe6d8 0, transparent 32%),
+        linear-gradient(170deg, #e9dfd0 0%, #f6f1ea 100%);
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+    .app {
+      width: min(980px, 100%);
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+    }
+    .panel, .chat {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(30, 26, 20, 0.08);
+    }
+    .panel {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      margin: 0;
+    }
+    .sub {
+      margin: 0;
+      color: var(--sub);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: #58544f;
+      margin-bottom: 6px;
+    }
+    textarea, input {
+      width: 100%;
+      border: 1px solid #cfc7bb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fffcf7;
+      color: #2a2825;
+      font-size: 13px;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.08s ease, opacity 0.2s ease;
+    }
+    button:active { transform: translateY(1px); }
+    .primary { background: var(--accent); color: #fff; }
+    .ghost { background: #ece6dc; color: #403d38; }
+    .status {
+      font-size: 12px;
+      color: #5f5a53;
+      background: #f4efe5;
+      border: 1px dashed #d2c9ba;
+      border-radius: 8px;
+      padding: 8px 10px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .chat {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      min-height: 74vh;
+    }
+    .chat-head {
+      border-bottom: 1px solid var(--border);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: #57534c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-right: 6px;
+      background: #9ca3af;
+    }
+    .dot.ok { background: #16a34a; }
+    .messages {
+      padding: 14px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      max-width: min(92%, 740px);
+      line-height: 1.55;
+      border-radius: 12px;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      animation: fadein 0.18s ease;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #d6f4ee;
+      border: 1px solid #b9e8de;
+      color: #0b5250;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: #fff1db;
+      border: 1px solid #f2ddb8;
+      color: #7a4317;
+    }
+    .msg.error {
+      align-self: center;
+      background: #fee2e2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+    }
+    .composer {
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+    .composer textarea {
+      min-height: 64px;
+      max-height: 180px;
+      margin: 0;
+    }
+    .send {
+      min-width: 92px;
+      align-self: flex-end;
+      background: #b45309;
+      color: #fff;
+    }
+    @keyframes fadein {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 880px) {
+      .app { grid-template-columns: 1fr; }
+      .chat { min-height: 62vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="panel">
+      <h1 class="title">Qwen3.5-0.8B 本地测试台</h1>
+      <p class="sub">用于快速测试模型对话能力。后端默认请求本机 OpenAI 兼容接口：<code>127.0.0.1:8000/v1</code>。</p>
+
+      <div>
+        <label for="modelInput">模型名</label>
+        <input id="modelInput" value="Qwen3.5-0.8B-Q4_K_M.gguf" />
+      </div>
+      <div>
+        <label for="systemInput">系统提示词</label>
+        <textarea id="systemInput">你是一位温柔、真诚的中文助手。回答要求：1）简短，通常两三句话；2）语气温和自然，像朋友聊天；3）认真倾听对方的感受，必要时给予共情回应；4）保持真诚坦率，不说空话套话，不过度夸赞；5）遇到不确定的事如实说不知道。</textarea>
+      </div>
+      <div class="row">
+        <div>
+          <label for="tempInput">temperature</label>
+          <input id="tempInput" type="number" step="0.1" min="0" max="2" value="0.7" />
+        </div>
+        <div>
+          <label for="maxTokensInput">max_tokens</label>
+          <input id="maxTokensInput" type="number" min="16" max="1024" value="256" />
+        </div>
+      </div>
+      <div class="btns">
+        <button id="pingBtn" class="ghost">检查模型服务</button>
+        <button id="clearBtn" class="ghost">清空对话</button>
+      </div>
+      <div id="status" class="status">等待检查模型服务...</div>
+    </aside>
+
+    <section class="chat">
+      <div class="chat-head">
+        <div><span id="dot" class="dot"></span><span id="headText">模型未检测</span></div>
+        <div>本地网页测试</div>
+      </div>
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <textarea id="inputBox" placeholder="输入内容后按 Enter 发送，Shift+Enter 换行。"></textarea>
+        <button id="sendBtn" class="send">发送</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
