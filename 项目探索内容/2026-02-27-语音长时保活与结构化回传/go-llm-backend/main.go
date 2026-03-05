@@ -19,14 +19,17 @@ import (
 )
 
 type llmRequest struct {
-	Type      string `json:"type"`
-	RequestID string `json:"request_id"`
-	SessionID string `json:"session_id"`
-	Text      string `json:"text"`
-	Emotion   string `json:"emotion"`
-	Event     string `json:"event"`
-	Final     bool   `json:"final"`
-	TsMS      int64  `json:"ts_ms"`
+	Type          string         `json:"type"`
+	RequestID     string         `json:"request_id"`
+	SessionID     string         `json:"session_id"`
+	Text          string         `json:"text"`
+	Emotion       string         `json:"emotion"`
+	Event         string         `json:"event"`
+	Language      string         `json:"language,omitempty"`
+	Final         bool           `json:"final"`
+	TsMS          int64          `json:"ts_ms"`
+	VisionContext map[string]any `json:"vision_context,omitempty"`
+	VisionImages  []string       `json:"vision_images,omitempty"`
 }
 
 type llmResponse struct {
@@ -51,14 +54,14 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content,omitempty"`
+	Content any    `json:"content"`
 }
 
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta        openAITextCarrier `json:"delta"`
 		Message      openAITextCarrier `json:"message"`
-		FinishReason string `json:"finish_reason"`
+		FinishReason string            `json:"finish_reason"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -97,12 +100,11 @@ func newSessionMemory(maxMessages int) *sessionMemory {
 	}
 }
 
-func (m *sessionMemory) snapshotWithUser(sessionID, userContent string) []openAIMessage {
+func (m *sessionMemory) snapshot(sessionID string) []openAIMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	base := append([]openAIMessage(nil), m.history[sessionID]...)
-	base = append(base, openAIMessage{Role: "user", Content: userContent})
 	if len(base) > m.maxMessages {
 		base = base[len(base)-m.maxMessages:]
 	}
@@ -165,10 +167,70 @@ func formatUserInput(req llmRequest) string {
 	if text == "" {
 		return ""
 	}
-	if req.Emotion == "" && req.Event == "" {
+	language := strings.TrimSpace(req.Language)
+	meta := ""
+	if req.Emotion != "" || req.Event != "" {
+		meta = fmt.Sprintf("[voice_meta] emotion=%s event=%s final=%t", req.Emotion, req.Event, req.Final)
+	}
+	langMeta := ""
+	if language != "" {
+		langMeta = "[asr_language] " + language
+	}
+	vision := ""
+	if len(req.VisionContext) > 0 {
+		if raw, err := json.Marshal(req.VisionContext); err == nil {
+			vision = "[vision_context] " + string(raw)
+		}
+	}
+	visionRule := ""
+	if len(req.VisionImages) > 0 {
+		visionRule = "[vision_alignment_rule] 先按frame_timestamps时间顺序定位画面，再结合utterance_timeline理解“刚才/第二个/前一个”，回答语言跟随asr_language。"
+	}
+	var sections []string
+	sections = append(sections, text)
+	if meta != "" {
+		sections = append(sections, meta)
+	}
+	if langMeta != "" {
+		sections = append(sections, langMeta)
+	}
+	if vision != "" {
+		sections = append(sections, vision)
+	}
+	if visionRule != "" {
+		sections = append(sections, visionRule)
+	}
+	if len(sections) == 1 {
 		return text
 	}
-	return fmt.Sprintf("%s\n\n[voice_meta] emotion=%s event=%s final=%t", text, req.Emotion, req.Event, req.Final)
+	return strings.Join(sections, "\n\n")
+}
+
+func buildUserMessage(userContent string, visionImages []string) openAIMessage {
+	if len(visionImages) == 0 {
+		return openAIMessage{Role: "user", Content: userContent}
+	}
+	parts := make([]any, 0, len(visionImages)+1)
+	for _, raw := range visionImages {
+		url := strings.TrimSpace(raw)
+		if url == "" {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": url,
+			},
+		})
+	}
+	parts = append(parts, map[string]any{
+		"type": "text",
+		"text": userContent,
+	})
+	if len(parts) <= 1 {
+		return openAIMessage{Role: "user", Content: userContent}
+	}
+	return openAIMessage{Role: "user", Content: parts}
 }
 
 func (b *llmBackend) streamReply(ctx context.Context, req llmRequest, onDelta func(string) error) (string, error) {
@@ -183,7 +245,8 @@ func (b *llmBackend) streamReply(ctx context.Context, req llmRequest, onDelta fu
 	messages := []openAIMessage{
 		{Role: "system", Content: b.systemPrompt},
 	}
-	messages = append(messages, b.memory.snapshotWithUser(req.SessionID, userContent)...)
+	messages = append(messages, b.memory.snapshot(req.SessionID)...)
+	messages = append(messages, buildUserMessage(userContent, req.VisionImages))
 
 	payload := openAIRequest{
 		Model:    b.model,
@@ -366,9 +429,10 @@ const (
 	pongWait      = 70 * time.Second
 	pingPeriod    = 25 * time.Second
 	writeWait     = 10 * time.Second
-	maxMessageLen = 1 << 20
 	maxQueuedReqs = 32
 )
+
+var wsMaxMessageBytes = int64(getEnvInt("WS_MAX_MESSAGE_BYTES", 64*1024*1024))
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -381,13 +445,14 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":              "ok",
-			"ts_ms":               time.Now().UnixMilli(),
-			"llm_model":           backend.model,
-			"openai_base_url":     backend.baseURL,
-			"has_openai_api_key":  strings.TrimSpace(backend.apiKey) != "",
-			"chat_history_limit":  backend.memory.maxMessages,
-			"llm_timeout_seconds": int(backend.timeout.Seconds()),
+			"status":               "ok",
+			"ts_ms":                time.Now().UnixMilli(),
+			"llm_model":            backend.model,
+			"openai_base_url":      backend.baseURL,
+			"has_openai_api_key":   strings.TrimSpace(backend.apiKey) != "",
+			"chat_history_limit":   backend.memory.maxMessages,
+			"llm_timeout_seconds":  int(backend.timeout.Seconds()),
+			"ws_max_message_bytes": wsMaxMessageBytes,
 		})
 	})
 	mux.HandleFunc("/ws/edge", handleEdgeWS(backend))
@@ -410,7 +475,7 @@ func handleEdgeWS(backend *llmBackend) http.HandlerFunc {
 
 		var writeMu sync.Mutex
 
-		conn.SetReadLimit(maxMessageLen)
+		conn.SetReadLimit(wsMaxMessageBytes)
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 		conn.SetPongHandler(func(string) error {
 			_ = conn.SetReadDeadline(time.Now().Add(pongWait))

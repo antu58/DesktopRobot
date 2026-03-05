@@ -19,6 +19,7 @@
   - Edge->Go 心跳参数可配置，默认不因 pong 超时主动断链（`BACKEND_WS_PING_TIMEOUT_S=0`）。
   - Go 侧 WS 改为“读循环 + 处理循环”解耦，避免 LLM 执行期间阻塞读导致 keepalive 误判。
 - 已完成：Docker 默认读取 `../../Soul/.env`，使用 Soul 中的 `OPENAI_API_KEY / OPENAI_BASE_URL / LLM_MODEL`。
+- 新增：网页端支持并行上传视频帧（默认 720P/1fps），Edge 维护 20 秒循环缓存（20 帧）；命中视觉问句时注入 `vision_context + vision_images`（整包帧）到 LLM。
 
 ## 核心设计决策（当前版本）
 
@@ -95,8 +96,25 @@ Edge Frontend -> Browser display
   "text": "明天天气怎么样",
   "emotion": "EMO_UNKNOWN",
   "event": "Speech",
+  "language": "zh",
   "final": true,
-  "ts_ms": 1700000000000
+  "ts_ms": 1700000000000,
+  "vision_context": {
+    "reason": "visual_query",
+    "query_text": "第二个是什么",
+    "query_language": "zh",
+    "query_ts_ms": 1700000000000,
+    "frame_interval_ms": 1000,
+    "cache_window_seconds": 20,
+    "frame_count": 20,
+    "frame_timestamps": [
+      {"index": 1, "ts_ms": 1699999990000, "delta_ms_to_query": -10000}
+    ],
+    "utterance_timeline": [
+      {"ts_ms": 1699999999000, "delta_ms_to_query": -1000, "language": "zh", "text": "再看看这个"}
+    ]
+  },
+  "vision_images": ["data:image/jpeg;base64,..."]
 }
 ```
 
@@ -224,6 +242,23 @@ docker compose up -d --build
 - 前端页面：`http://127.0.0.1:18288`
 - Go 后端健康检查：`http://127.0.0.1:18090/healthz`
 - Edge 健康检查：`http://127.0.0.1:18288/healthz`
+
+## 多模态联调（语音+视频）
+
+1. 启动本目录 docker compose：
+
+```bash
+cd /Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-02-27-语音长时保活与结构化回传
+docker compose up -d --build
+```
+
+2. 打开 `http://127.0.0.1:18288`，点击开始；网页会同时上传麦克风 PCM 与摄像头帧。
+
+3. 默认视觉缓存策略：
+   - `VISION_FRAME_SEND_INTERVAL_MS=1000`（1fps）
+   - `VISION_CACHE_SECONDS=20`
+   - `VISION_CACHE_FRAMES=20`
+   - 命中视觉问句时，把缓存中的 20 帧按时间顺序全部送入 `vision_images`。
 
 ## 已知边界与后续建议
 

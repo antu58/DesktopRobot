@@ -3,51 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Edge Frontend Voice POC</title>
+  <title>实时多模态网页测试（语音+视频）</title>
   <style>
     :root {
       --bg: #081426;
       --panel: #0f1c2f;
+      --line: rgba(148, 163, 184, 0.28);
       --text: #dbeafe;
       --muted: #93a7c3;
       --ok: #22c55e;
       --warn: #f59e0b;
       --backend: #a7f3d0;
+      --vision: #93c5fd;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 24px;
+      padding: 18px;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: radial-gradient(circle at top, #122645 0%, #081426 65%, #050a14 100%);
       color: var(--text);
-      min-height: 100vh;
-      box-sizing: border-box;
+    }
+    .root {
+      max-width: 1360px;
+      margin: 0 auto;
       display: grid;
-      place-items: center;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
     }
     .card {
-      width: min(920px, 100%);
-      border: 1px solid rgba(148, 163, 184, 0.28);
-      border-radius: 14px;
-      background: rgba(15, 28, 47, 0.88);
-      padding: 18px;
-      box-sizing: border-box;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(15, 28, 47, 0.9);
+      padding: 14px;
     }
-    h1 {
-      margin: 0 0 8px 0;
-      font-size: 21px;
-    }
-    .sub {
-      color: var(--muted);
-      margin-bottom: 14px;
-      font-size: 13px;
-    }
+    h1 { margin: 0 0 10px 0; font-size: 20px; }
+    h2 { margin: 0 0 8px 0; font-size: 16px; }
+    .sub { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
     .row {
       display: flex;
       align-items: center;
       gap: 10px;
       flex-wrap: wrap;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
     button {
       border: 0;
@@ -60,45 +58,68 @@
     #startBtn { background: var(--ok); }
     #stopBtn { background: var(--warn); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #status, #meta, #backendState {
-      font-size: 13px;
-      color: var(--muted);
-    }
-    #backendState {
-      color: #c4b5fd;
+    #status, #backendState, #visionState, #meta { font-size: 13px; color: var(--muted); }
+    #backendState { color: #c4b5fd; }
+    #visionState { color: var(--vision); }
+    video {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #000;
+      margin-bottom: 10px;
     }
     .box {
       min-height: 220px;
       max-height: 340px;
       overflow: auto;
-      border-radius: 12px;
-      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 10px;
+      border: 1px solid var(--line);
       background: #050d1b;
-      padding: 12px;
-      line-height: 1.6;
+      padding: 10px;
+      line-height: 1.55;
       white-space: pre-wrap;
-      margin-top: 10px;
+      font-size: 14px;
     }
+    .stack { display: grid; grid-template-rows: auto auto; gap: 12px; }
     .asr-final { color: #e5e7eb; }
     .asr-partial { color: #93c5fd; }
     .backend { color: var(--backend); }
+    .vision { color: var(--vision); }
     .warn { color: #fbbf24; }
+    @media (max-width: 980px) {
+      .root { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>前端整体节点（采集 + FunASR + 过滤 + 后端回传）</h1>
-    <div class="sub">浏览器仅采集PCM并发送至前端边缘服务，边缘服务识别后再将结构化结果送往Go后端。</div>
+  <div class="root">
+    <section class="card">
+      <h1>实时多模态采集</h1>
+      <div class="sub">同一连接上传音频PCM与视频帧，边缘端完成ASR与视觉编排后返回文本。</div>
+      <div class="row">
+        <button id="startBtn">开始</button>
+        <button id="stopBtn" disabled>停止</button>
+        <span id="status">状态: 未连接</span>
+        <span id="backendState">后端: 空闲</span>
+        <span id="visionState">视觉: 空闲</span>
+      </div>
+      <div id="meta"></div>
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas" width="960" height="540" style="display:none"></canvas>
+      <h2>ASR 转写</h2>
+      <div id="transcript" class="box"></div>
+    </section>
 
-    <div class="row">
-      <button id="startBtn">开始采集</button>
-      <button id="stopBtn" disabled>停止</button>
-      <span id="status">状态: 未连接</span>
-      <span id="backendState">后端: 空闲</span>
-    </div>
-    <div id="meta"></div>
-    <div id="transcript" class="box"></div>
-    <div id="backendResp" class="box"></div>
+    <section class="card stack">
+      <div>
+        <h2>LLM 文本回复</h2>
+        <div id="backendResp" class="box"></div>
+      </div>
+      <div>
+        <h2>视觉链路日志</h2>
+        <div id="visionLog" class="box"></div>
+      </div>
+    </section>
   </div>
 
   <script>
@@ -106,9 +127,14 @@
     const stopBtn = document.getElementById("stopBtn");
     const statusEl = document.getElementById("status");
     const backendStateEl = document.getElementById("backendState");
+    const visionStateEl = document.getElementById("visionState");
     const metaEl = document.getElementById("meta");
     const transcriptEl = document.getElementById("transcript");
     const backendEl = document.getElementById("backendResp");
+    const visionLogEl = document.getElementById("visionLog");
+    const videoEl = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
 
     let ws = null;
     let micStream = null;
@@ -117,18 +143,19 @@
     let processor = null;
     let running = false;
     let pingTimer = null;
+    let frameTimer = null;
     let partialLine = null;
-    const streamLines = new Map();
-    const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
     let wsBackpressureWarned = false;
+    const streamLines = new Map();
 
-    function setStatus(s) {
-      statusEl.textContent = `状态: ${s}`;
-    }
+    const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+    const FRAME_INTERVAL_MS = 1000;
+    const FRAME_WIDTH = 1280;
+    const FRAME_HEIGHT = 720;
 
-    function setBackendState(s) {
-      backendStateEl.textContent = `后端: ${s}`;
-    }
+    function setStatus(s) { statusEl.textContent = `状态: ${s}`; }
+    function setBackendState(s) { backendStateEl.textContent = `后端: ${s}`; }
+    function setVisionState(s) { visionStateEl.textContent = `视觉: ${s}`; }
 
     function mapBackendStage(stage) {
       const table = {
@@ -143,6 +170,14 @@
         failed: "后端失败"
       };
       return table[stage] || stage || "未知";
+    }
+
+    function fmtTime(tsMs) {
+      const d = new Date(tsMs || Date.now());
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
     }
 
     function appendLine(el, text, cls) {
@@ -238,17 +273,32 @@
       return `${proto}//${location.host}/ws/client`;
     }
 
+    function sendFrame() {
+      if (!running || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+      if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) return;
+
+      canvas.width = FRAME_WIDTH;
+      canvas.height = FRAME_HEIGHT;
+      ctx.drawImage(videoEl, 0, 0, FRAME_WIDTH, FRAME_HEIGHT);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+      ws.send(JSON.stringify({ event: "frame", ts_ms: Date.now(), image: dataUrl }));
+    }
+
     async function start() {
       if (running) return;
       running = true;
       startBtn.disabled = true;
       stopBtn.disabled = false;
+
       transcriptEl.innerHTML = "";
       backendEl.innerHTML = "";
+      visionLogEl.innerHTML = "";
       streamLines.clear();
       wsBackpressureWarned = false;
       partialLine = null;
       setBackendState("空闲");
+      setVisionState("空闲");
 
       try {
         ws = new WebSocket(wsUrl());
@@ -262,50 +312,87 @@
             }
           }, 15000);
         };
-        ws.onerror = (evt) => {
+
+        ws.onerror = () => {
           setStatus("WebSocket错误");
           appendLine(backendEl, "[warn] browser websocket error", "warn");
         };
+
         ws.onclose = (evt) => {
           const closeInfo = `WebSocket关闭 code=${evt.code} reason=${evt.reason || "-"}`;
           setStatus(closeInfo);
           appendLine(backendEl, `[warn] ${closeInfo}`, "warn");
         };
+
         ws.onmessage = (evt) => {
+          let msg;
           try {
-            const msg = JSON.parse(evt.data);
-            if (msg.event === "status") {
-              metaEl.textContent = `session=${msg.session_id || "-"} backend_connected=${msg.backend_connected}`;
-              return;
+            msg = JSON.parse(evt.data);
+          } catch (_) {
+            return;
+          }
+          if (!msg || !msg.event) return;
+
+          if (msg.event === "status") {
+            metaEl.textContent = `session=${msg.session_id || "-"} backend_connected=${msg.backend_connected}`;
+            return;
+          }
+          if (msg.event === "asr") {
+            renderAsr(msg);
+            return;
+          }
+          if (msg.event === "backend_result") {
+            upsertBackendStream({ ...msg, final: true });
+            return;
+          }
+          if (msg.event === "backend_stream") {
+            upsertBackendStream(msg);
+            return;
+          }
+          if (msg.event === "backend_state") {
+            const label = mapBackendStage(msg.stage);
+            const extra = msg.detail ? ` (${msg.detail})` : "";
+            setBackendState(`${label}${extra}`);
+            return;
+          }
+          if (msg.event === "vision_status") {
+            const detail = `device=${msg.device || "-"} vlm_ready=${msg.vlm_ready ? "Y" : "N"}`;
+            appendLine(visionLogEl, `[${fmtTime(msg.ts_ms)}] [connected] ${detail}`, "vision");
+            return;
+          }
+          if (msg.event === "vision_state") {
+            const d = msg.detail ? ` (${msg.detail})` : "";
+            setVisionState(`${msg.stage}${d}`);
+            if (msg.stage === "enabled" || msg.stage === "inject_context" || msg.stage === "disabled") {
+              appendLine(visionLogEl, `[${fmtTime(msg.ts_ms)}] [${msg.stage}] ${msg.detail || ""}`.trim(), "vision");
             }
-            if (msg.event === "asr") {
-              renderAsr(msg);
-              return;
-            }
-            if (msg.event === "backend_result") {
-              upsertBackendStream({ ...msg, final: true });
-              return;
-            }
-            if (msg.event === "backend_stream") {
-              upsertBackendStream(msg);
-              return;
-            }
-            if (msg.event === "backend_state") {
-              const label = mapBackendStage(msg.stage);
-              const extra = msg.detail ? ` (${msg.detail})` : "";
-              setBackendState(`${label}${extra}`);
-              return;
-            }
-            if (msg.event === "filtered") {
-              appendLine(backendEl, `[filtered] ${msg.reason}: ${msg.text || ""}`, "warn");
-              return;
-            }
-            if (msg.event === "warn") {
-              appendLine(backendEl, `[warn] ${msg.message || ""}`, "warn");
-              return;
-            }
-          } catch (err) {
-            appendLine(backendEl, `[raw] ${evt.data}`, "warn");
+            return;
+          }
+          if (msg.event === "vision_analysis") {
+            const logs = Array.isArray(msg.new_logs) ? msg.new_logs.join(" | ") : "";
+            const summary = msg.slow_summary || "";
+            appendLine(
+              visionLogEl,
+              `[${fmtTime(msg.ts_ms)}] people=${msg.people_count ?? "-"} ${summary} ${logs}`.trim(),
+              "vision"
+            );
+            return;
+          }
+          if (msg.event === "slot_created") {
+            appendLine(
+              visionLogEl,
+              `[${fmtTime(msg.ts_ms)}] [slot#${msg.slot_index}] ${msg.source_text || ""} ${msg.slow_summary || ""}`.trim(),
+              "vision"
+            );
+            return;
+          }
+          if (msg.event === "filtered") {
+            appendLine(backendEl, `[filtered] ${msg.reason}: ${msg.text || ""}`, "warn");
+            return;
+          }
+          if (msg.event === "warn") {
+            appendLine(backendEl, `[warn] ${msg.message || ""}`, "warn");
+            return;
           }
         };
 
@@ -316,11 +403,18 @@
             noiseSuppression: true,
             autoGainControl: true
           },
-          video: false
+          video: {
+            facingMode: "user",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
         });
+
+        videoEl.srcObject = micStream;
         audioCtx = new AudioContext();
         source = audioCtx.createMediaStreamSource(micStream);
         processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
         processor.onaudioprocess = (evt) => {
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
           if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
@@ -336,8 +430,10 @@
           const pcm16 = float32ToInt16(downsampled);
           ws.send(pcm16.buffer);
         };
+
         source.connect(processor);
         processor.connect(audioCtx.destination);
+        frameTimer = setInterval(sendFrame, FRAME_INTERVAL_MS);
       } catch (err) {
         appendLine(backendEl, `启动失败: ${err.message || err}`, "warn");
         await stop();
@@ -355,8 +451,11 @@
           ws.send(JSON.stringify({ event: "flush" }));
         }
       } catch (_) {}
+
       if (pingTimer) clearInterval(pingTimer);
       pingTimer = null;
+      if (frameTimer) clearInterval(frameTimer);
+      frameTimer = null;
 
       if (processor) {
         processor.disconnect();
@@ -372,8 +471,10 @@
       audioCtx = null;
       micStream = null;
       ws = null;
+      videoEl.srcObject = null;
       setStatus("已停止");
       setBackendState("空闲");
+      setVisionState("空闲");
     }
 
     startBtn.addEventListener("click", start);

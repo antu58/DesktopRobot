@@ -11,6 +11,7 @@ Edge frontend service:
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from contextlib import suppress
 import json
 import logging
@@ -55,6 +56,13 @@ if _backend_ws_ping_timeout_raw <= 0:
     BACKEND_WS_PING_TIMEOUT_S = None
 else:
     BACKEND_WS_PING_TIMEOUT_S = max(5.0, _backend_ws_ping_timeout_raw)
+
+VISION_ENABLE = os.getenv("VISION_ENABLE", "1").strip() == "1"
+VISION_FRAME_SEND_INTERVAL_MS = max(200, int(os.getenv("VISION_FRAME_SEND_INTERVAL_MS", "1000")))
+VISION_CACHE_SECONDS = max(5, int(os.getenv("VISION_CACHE_SECONDS", "20")))
+VISION_CACHE_FRAMES = max(5, int(os.getenv("VISION_CACHE_FRAMES", "20")))
+UTTERANCE_CACHE_SECONDS = max(10, int(os.getenv("UTTERANCE_CACHE_SECONDS", "30")))
+UTTERANCE_CACHE_ITEMS = max(10, int(os.getenv("UTTERANCE_CACHE_ITEMS", "60")))
 
 SUBMIT_MIN_TEXT_CHARS = max(1, int(os.getenv("SUBMIT_MIN_TEXT_CHARS", "2")))
 SUBMIT_REQUIRE_SPEECH = os.getenv("SUBMIT_REQUIRE_SPEECH", "1").strip() == "1"
@@ -115,6 +123,10 @@ KEEP_SHORT_TOKENS = {
     "네", "예", "알겠어", "알겠습니다", "좋아요", "계속", "중지", "취소", "오케이",
 }
 DROP_FILLER_TOKENS = set(COMMON_FILLERS) | {"응", "...", "。。", ".."}
+VISUAL_QUERY_RE = re.compile(
+    r"(这是什么|这个是什么|这是啥|这个是啥|第[一二三四五六七八九十\\d]+个|刚才那个|屏幕上|画面里|你看到了吗|你看到什么|哪个东西|我手里|手上的|你认识这个|你认识.*东西|认不出来|这玩意|这个东西|what is this|do you recognize this)"
+    , re.IGNORECASE
+)
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 
@@ -204,6 +216,19 @@ class ParsedText:
     itn: str
 
 
+@dataclass
+class FrameCacheItem:
+    ts_ms: int
+    image: str
+
+
+@dataclass
+class UtteranceTimelineItem:
+    ts_ms: int
+    text: str
+    language: str
+
+
 def parse_funasr_text(text: str) -> ParsedText:
     tags = TAG_PATTERN.findall(text)
     clean = STRIP_TAG_PATTERN.sub("", text).strip()
@@ -219,6 +244,36 @@ def parse_funasr_text(text: str) -> ParsedText:
         event=event,
         itn=itn,
     )
+
+
+def json_or_none(raw: str) -> Optional[Dict[str, Any]]:
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def is_visual_query(text: str) -> bool:
+    return VISUAL_QUERY_RE.search(text) is not None
+
+
+def keep_recent_frames(frames: deque[FrameCacheItem], now_ms: int) -> None:
+    lower = now_ms - (VISION_CACHE_SECONDS * 1000)
+    while frames and frames[0].ts_ms < lower:
+        frames.popleft()
+    while len(frames) > VISION_CACHE_FRAMES:
+        frames.popleft()
+
+
+def keep_recent_utterances(items: deque[UtteranceTimelineItem], now_ms: int) -> None:
+    lower = now_ms - (UTTERANCE_CACHE_SECONDS * 1000)
+    while items and items[0].ts_ms < lower:
+        items.popleft()
+    while len(items) > UTTERANCE_CACHE_ITEMS:
+        items.popleft()
 
 def normalize_text_token(text: str) -> str:
     raw = unicodedata.normalize("NFKC", text.strip().lower())
@@ -405,6 +460,12 @@ async def healthz():
             "backend_max_pending": BACKEND_MAX_PENDING,
             "backend_ws_ping_interval_s": BACKEND_WS_PING_INTERVAL_S,
             "backend_ws_ping_timeout_s": BACKEND_WS_PING_TIMEOUT_S,
+            "vision_enable": VISION_ENABLE,
+            "vision_frame_send_interval_ms": VISION_FRAME_SEND_INTERVAL_MS,
+            "vision_cache_seconds": VISION_CACHE_SECONDS,
+            "vision_cache_frames": VISION_CACHE_FRAMES,
+            "utterance_cache_seconds": UTTERANCE_CACHE_SECONDS,
+            "utterance_cache_items": UTTERANCE_CACHE_ITEMS,
             "model_error": model_init_error,
         }
     )
@@ -448,6 +509,7 @@ async def ws_client(websocket: WebSocket):
             "session_id": session_id,
             "message": "connected",
             "backend_connected": backend_bridge.connected,
+            "vision_enable": VISION_ENABLE,
         }
     )
 
@@ -469,11 +531,125 @@ async def ws_client(websocket: WebSocket):
     merge_texts: List[str] = []
     merge_emotion = "EMO_UNKNOWN"
     merge_event = "Speech"
+    merge_language = "unknown"
     merge_started_ms = 0
     merge_last_ms = 0
     merge_version = 0
     merge_timer_task: Optional[asyncio.Task] = None
     request_seq = 0
+    frame_cache: deque[FrameCacheItem] = deque()
+    utterance_timeline: deque[UtteranceTimelineItem] = deque()
+    last_frame_enqueued_ms = 0
+
+    async def emit_vision_state(stage: str, detail: str = "") -> None:
+        payload: Dict[str, Any] = {
+            "event": "vision_state",
+            "session_id": session_id,
+            "stage": stage,
+            "cache_size": len(frame_cache),
+            "ts_ms": int(time.time() * 1000),
+        }
+        if detail:
+            payload["detail"] = detail
+        await send_event(payload)
+
+    def select_cached_frames(now_ms: int) -> List[FrameCacheItem]:
+        if not frame_cache:
+            return []
+        keep_recent_frames(frame_cache, now_ms)
+        return sorted(frame_cache, key=lambda item: item.ts_ms)
+
+    def build_vision_context(text: str, now_ms: int, language: str) -> Optional[Dict[str, Any]]:
+        query_text = text.strip()
+        if query_text == "" or not is_visual_query(query_text):
+            return None
+
+        frames = select_cached_frames(now_ms)
+        if not frames:
+            return None
+
+        images: List[str] = []
+        frame_timestamps: List[Dict[str, Any]] = []
+        for item in frames:
+            image = item.image.strip()
+            if image == "":
+                continue
+            index = len(images) + 1
+            images.append(image)
+            frame_timestamps.append(
+                {
+                    "index": index,
+                    "ts_ms": item.ts_ms,
+                    "delta_ms_to_query": item.ts_ms - now_ms,
+                }
+            )
+
+        if not images:
+            return None
+
+        first_frame_ms = frame_timestamps[0]["ts_ms"]
+        utterance_refs: List[Dict[str, Any]] = []
+        for item in utterance_timeline:
+            if item.ts_ms < first_frame_ms - 2000:
+                continue
+            utterance_refs.append(
+                {
+                    "ts_ms": item.ts_ms,
+                    "delta_ms_to_query": item.ts_ms - now_ms,
+                    "language": item.language,
+                    "text": item.text,
+                }
+            )
+        if len(utterance_refs) > 24:
+            utterance_refs = utterance_refs[-24:]
+
+        context: Dict[str, Any] = {
+            "reason": "visual_query",
+            "query_text": query_text,
+            "query_language": language,
+            "query_ts_ms": now_ms,
+            "frame_interval_ms": VISION_FRAME_SEND_INTERVAL_MS,
+            "cache_window_seconds": VISION_CACHE_SECONDS,
+            "frame_count": len(images),
+            "frame_timestamps": frame_timestamps,
+            "utterance_timeline": utterance_refs,
+            "alignment_note": "按frame_timestamps时间顺序理解画面，涉及“刚才/第二个/前一个”时结合时间和索引，回答语言跟随query_language。",
+        }
+        return {
+            "vision_context": context,
+            "vision_images": images,
+        }
+
+    async def enqueue_frame(payload: Dict[str, Any]) -> None:
+        nonlocal last_frame_enqueued_ms
+        if not VISION_ENABLE:
+            return
+        if not payload.get("image"):
+            return
+        now_ms = int(payload.get("ts_ms", int(time.time() * 1000)))
+        if now_ms - last_frame_enqueued_ms < VISION_FRAME_SEND_INTERVAL_MS:
+            return
+        last_frame_enqueued_ms = now_ms
+        frame_cache.append(FrameCacheItem(ts_ms=now_ms, image=str(payload.get("image", ""))))
+        keep_recent_frames(frame_cache, now_ms)
+        if len(frame_cache) == 1 or len(frame_cache) % 5 == 0:
+            oldest_ms = frame_cache[0].ts_ms if frame_cache else now_ms
+            await emit_vision_state("caching", f"frames={len(frame_cache)} window_ms={max(0, now_ms - oldest_ms)}")
+
+    def track_utterance(parsed: ParsedText, now_ms: int, text_class: str) -> None:
+        if text_class == "drop_filler":
+            return
+        text = parsed.clean_text.strip()
+        if text == "":
+            return
+        utterance_timeline.append(
+            UtteranceTimelineItem(
+                ts_ms=now_ms,
+                text=text,
+                language=parsed.language,
+            )
+        )
+        keep_recent_utterances(utterance_timeline, now_ms)
 
     async def emit_asr(parsed: ParsedText, final: bool) -> None:
         await send_event(
@@ -490,17 +666,16 @@ async def ws_client(websocket: WebSocket):
             }
         )
 
-    def should_submit(parsed: ParsedText, now_ms: int, prev_submit_ms: int) -> Tuple[bool, str, str]:
-        text_class = classify_utterance(parsed.clean_text)
+    def should_submit(parsed: ParsedText, now_ms: int, prev_submit_ms: int, text_class: str) -> Tuple[bool, str]:
         if FILTER_FILLER and text_class == "drop_filler":
-            return False, "filler_text", text_class
+            return False, "filler_text"
         if text_class != "keep_short" and len(parsed.clean_text) < SUBMIT_MIN_TEXT_CHARS:
-            return False, "text_too_short", text_class
+            return False, "text_too_short"
         if SUBMIT_REQUIRE_SPEECH and parsed.event != "Speech":
-            return False, "not_speech_event", text_class
+            return False, "not_speech_event"
         if now_ms - prev_submit_ms < SUBMIT_MIN_INTERVAL_MS:
-            return False, "submit_interval_limited", text_class
-        return True, "", text_class
+            return False, "submit_interval_limited"
+        return True, ""
 
     def should_interrupt_post_token(new_text: str, text_class: str) -> bool:
         if text_class in {"drop_filler", "keep_short"}:
@@ -523,7 +698,7 @@ async def ws_client(websocket: WebSocket):
 
     async def commit_merged(reason: str) -> bool:
         nonlocal merge_texts, merge_started_ms, merge_last_ms, merge_version, request_seq
-        nonlocal merge_emotion, merge_event
+        nonlocal merge_emotion, merge_event, merge_language
         if not merge_texts:
             return False
         text = " ".join(s.strip() for s in merge_texts if s and s.strip()).strip()
@@ -531,16 +706,19 @@ async def ws_client(websocket: WebSocket):
             merge_texts = []
             merge_started_ms = 0
             merge_last_ms = 0
+            merge_language = "unknown"
             cancel_merge_timer()
             return False
 
         emotion = merge_emotion
         event = merge_event
+        language = merge_language
         merge_count = len(merge_texts)
 
         merge_texts = []
         merge_started_ms = 0
         merge_last_ms = 0
+        merge_language = "unknown"
         merge_version += 1
         cancel_merge_timer()
 
@@ -552,17 +730,29 @@ async def ws_client(websocket: WebSocket):
             "text": text,
             "emotion": emotion,
             "event": event,
+            "language": language,
             "final": True,
             "ts_ms": int(time.time() * 1000),
             "_merge_reason": reason,
             "_merge_count": merge_count,
         }
+        visual_pack = build_vision_context(text, int(req_payload["ts_ms"]), language)
+        if visual_pack:
+            req_payload.update(visual_pack)
+            vision_context = visual_pack.get("vision_context", {})
+            frame_count = int(vision_context.get("frame_count", 0) or 0)
+            utterance_count = len(vision_context.get("utterance_timeline", []) or [])
+            await emit_vision_state(
+                "inject_context",
+                f"images={len(visual_pack.get('vision_images', []))} frames={frame_count} aligned_utterances={utterance_count}",
+            )
 
         if backend_queue.full():
             # Keep buffered content and retry later instead of dropping user speech.
             merge_texts = [text]
             merge_emotion = emotion
             merge_event = event
+            merge_language = language
             merge_started_ms = int(time.time() * 1000)
             merge_last_ms = merge_started_ms
             await send_event(
@@ -763,7 +953,7 @@ async def ws_client(websocket: WebSocket):
                     await active_backend_task
 
     async def ingest_final_candidate(parsed: ParsedText, now_ms: int, text_class: str) -> None:
-        nonlocal merge_started_ms, merge_last_ms, merge_emotion, merge_event
+        nonlocal merge_started_ms, merge_last_ms, merge_emotion, merge_event, merge_language
         text = parsed.clean_text.strip()
         if text == "":
             return
@@ -779,6 +969,7 @@ async def ws_client(websocket: WebSocket):
         merge_last_ms = now_ms
         merge_emotion = parsed.emotion
         merge_event = parsed.event
+        merge_language = parsed.language
         merge_texts.append(text)
 
         if now_ms-merge_started_ms >= FINAL_MERGE_MAX_MS:
@@ -803,7 +994,9 @@ async def ws_client(websocket: WebSocket):
         parsed = parse_funasr_text(text)
         await emit_asr(parsed, final=True)
         now_ms = int(time.time() * 1000)
-        do_submit, reason, text_class = should_submit(parsed, now_ms, last_submit_ms)
+        text_class = classify_utterance(parsed.clean_text)
+        track_utterance(parsed, now_ms, text_class)
+        do_submit, reason = should_submit(parsed, now_ms, last_submit_ms, text_class)
         if not do_submit:
             await send_event(
                 {
@@ -868,6 +1061,13 @@ async def ws_client(websocket: WebSocket):
         await commit_merged("flush")
 
     backend_dispatcher_task = asyncio.create_task(backend_dispatcher(), name=f"backend-dispatcher-{session_id}")
+    if VISION_ENABLE:
+        await emit_vision_state(
+            "enabled",
+            f"cache={VISION_CACHE_FRAMES}frames/{VISION_CACHE_SECONDS}s interval={VISION_FRAME_SEND_INTERVAL_MS}ms",
+        )
+    else:
+        await emit_vision_state("disabled")
 
     try:
         while True:
@@ -892,16 +1092,15 @@ async def ws_client(websocket: WebSocket):
                 continue
 
             if "text" in msg and msg["text"]:
-                event = ""
-                try:
-                    event = json.loads(msg["text"]).get("event", "")
-                except Exception:
-                    event = ""
+                payload = json_or_none(msg["text"]) or {}
+                event = str(payload.get("event", ""))
                 if event == "flush":
                     await flush_all()
                     await send_event({"event": "status", "session_id": session_id, "message": "flushed"})
                 elif event == "ping":
                     await send_event({"event": "pong", "session_id": session_id})
+                elif event == "frame":
+                    await enqueue_frame(payload)
                 continue
     except WebSocketDisconnect as exc:
         ws_closed = True
