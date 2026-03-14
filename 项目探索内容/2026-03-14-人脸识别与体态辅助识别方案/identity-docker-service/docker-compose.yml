@@ -1,0 +1,23 @@
+services:
+  identity-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: identity-service
+    ports:
+      - "18081:18080"
+    environment:
+      MAX_PEOPLE: "5"
+      PERSON_CONF: "0.35"
+      PERSON_IOU: "0.45"
+      FACE_SIM_THRESHOLD: "0.62"
+      BODY_SIM_THRESHOLD: "0.72"
+      OCCLUSION_HOLD_MS: "1500"
+      TRACK_TTL_MS: "2200"
+      ALLOW_FALLBACK: "0"
+    volumes:
+      - ./data:/app/data
+      - ./model-cache/insightface:/root/.insightface
+      - ./model-cache/torch:/root/.cache/torch
+      - ./model-cache/ultralytics:/tmp/Ultralytics
+    restart: unless-stopped

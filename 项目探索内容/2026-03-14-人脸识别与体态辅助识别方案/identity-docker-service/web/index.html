@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>近距离多人识别与命名</title>
+  <style>
+    :root {
+      --bg: #0a1324;
+      --panel: #111f3a;
+      --line: rgba(148, 163, 184, 0.28);
+      --text: #d8e6ff;
+      --muted: #97afd1;
+      --ok: #34d399;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: radial-gradient(circle at top left, #17335f, #0b1529 60%, #060c17);
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .layout {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(17, 31, 58, 0.9);
+      padding: 14px;
+    }
+    .title {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    #startBtn { background: var(--ok); color: #052418; }
+    #stopBtn { background: var(--warn); color: #2d1c06; }
+    #status, #meta { color: var(--muted); font-size: 13px; }
+    .video-wrap {
+      position: relative;
+      width: 100%;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #000;
+      aspect-ratio: 16 / 9;
+    }
+    video, canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .list {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0a1730;
+      padding: 10px;
+      min-height: 260px;
+      max-height: 42vh;
+      overflow: auto;
+    }
+    .person-card {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 9px;
+      margin-bottom: 8px;
+      background: rgba(16, 29, 54, 0.9);
+    }
+    .person-card.selected {
+      border-color: rgba(96, 165, 250, 0.9);
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35) inset;
+    }
+    .person-main {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    .badge {
+      font-size: 12px;
+      border-radius: 6px;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .badge.ok { color: #6ee7b7; border-color: rgba(110, 231, 183, 0.45); }
+    .badge.unknown { color: #fbbf24; border-color: rgba(251, 191, 36, 0.45); }
+    .name-row {
+      display: flex;
+      gap: 8px;
+    }
+    input {
+      flex: 1;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #071326;
+      color: var(--text);
+      padding: 7px 9px;
+    }
+    .name-btn {
+      background: #60a5fa;
+      color: #071224;
+      padding: 7px 10px;
+    }
+    .small {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .people-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .people-table td, .people-table th {
+      border-bottom: 1px solid var(--line);
+      padding: 6px 4px;
+      text-align: left;
+    }
+    .toast {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+    .toast.error { color: #fca5a5; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <section class="card">
+      <h1 class="title">近距离多人识别（3-5 米）</h1>
+      <div class="sub">识别策略：人脸优先，遮挡短时保持，body 特征补偿。支持最多 5 人同时识别，并可将临时 track 命名为真实姓名。</div>
+      <div class="row">
+        <button id="startBtn">开始识别</button>
+        <button id="stopBtn" disabled>停止</button>
+        <span id="status">状态: 未启动</span>
+      </div>
+      <div id="meta">-</div>
+      <div class="video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <canvas id="capture" style="display:none"></canvas>
+      <div id="toast" class="toast"></div>
+    </section>
+
+    <section class="card">
+      <h2 class="title">当前画面目标</h2>
+      <div id="detectionList" class="list"></div>
+      <div class="person-card" style="margin-top:10px">
+        <div class="person-main">
+          <div><b>命名面板</b></div>
+          <span class="badge" id="selectedTrack">未选择目标</span>
+        </div>
+        <div class="name-row">
+          <input id="nameInput" placeholder="名称（可选），如 张三" />
+        </div>
+        <div class="name-row" style="margin-top:8px">
+          <input id="relationInput" placeholder="关系（可选），如 主人的朋友 / 主人的母亲" />
+          <button id="saveNameBtn" class="name-btn" disabled>保存名称</button>
+        </div>
+        <div class="small">先点击上方某个目标的“选中命名”，再在这里保存名称/关系（可只填其一）。</div>
+      </div>
+
+      <h2 class="title" style="margin-top:12px">已命名人员库</h2>
+      <div class="list" style="min-height:180px; max-height:28vh">
+        <table class="people-table" id="peopleTable">
+          <thead><tr><th>person_id</th><th>名称</th><th>关系</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const metaEl = document.getElementById('meta');
+    const toastEl = document.getElementById('toast');
+
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
+    const capture = document.getElementById('capture');
+    const captureCtx = capture.getContext('2d');
+
+    const detectionList = document.getElementById('detectionList');
+    const peopleBody = document.querySelector('#peopleTable tbody');
+    const selectedTrackEl = document.getElementById('selectedTrack');
+    const nameInputEl = document.getElementById('nameInput');
+    const relationInputEl = document.getElementById('relationInput');
+    const saveNameBtn = document.getElementById('saveNameBtn');
+
+    let running = false;
+    let stream = null;
+    let inFlight = false;
+    let loopHandle = null;
+    let lastTickMs = 0;
+    let lastResult = null;
+    let selectedTrackId = null;
+    const INTERVAL_MS = 280;
+
+    function setStatus(text) {
+      statusEl.textContent = `状态: ${text}`;
+    }
+
+    function toast(msg, isError = false) {
+      toastEl.textContent = msg;
+      toastEl.className = isError ? 'toast error' : 'toast';
+    }
+
+    async function fetchPeople() {
+      try {
+        const res = await fetch('/api/people');
+        const data = await res.json();
+        const people = Array.isArray(data.people) ? data.people : [];
+        peopleBody.innerHTML = people
+          .map(p => {
+            const name = p.display_name || '-';
+            const relation = p.relation_desc || '-';
+            const status = p.unknown ? '待完善' : '已命名';
+            return `<tr><td>${p.person_id}</td><td>${name}</td><td>${relation}</td><td>${status}</td></tr>`;
+          })
+          .join('');
+      } catch (_) {
+      }
+    }
+
+    function drawDetections(result) {
+      const vw = video.videoWidth || 1280;
+      const vh = video.videoHeight || 720;
+      overlay.width = vw;
+      overlay.height = vh;
+      overlayCtx.clearRect(0, 0, vw, vh);
+
+      if (!result || !Array.isArray(result.detections)) return;
+
+      for (const det of result.detections) {
+        const [x1, y1, x2, y2] = det.bbox;
+        const unknown = !!det.unknown;
+        overlayCtx.lineWidth = 2;
+        overlayCtx.strokeStyle = unknown ? '#fbbf24' : '#34d399';
+        overlayCtx.fillStyle = unknown ? '#fbbf24' : '#34d399';
+        overlayCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+        const label = `${det.display_name} #${det.track_id}`;
+        overlayCtx.font = '16px sans-serif';
+        const w = overlayCtx.measureText(label).width + 10;
+        overlayCtx.fillRect(x1, Math.max(0, y1 - 22), w, 20);
+        overlayCtx.fillStyle = '#06101f';
+        overlayCtx.fillText(label, x1 + 5, Math.max(14, y1 - 7));
+      }
+    }
+
+    function renderDetectionList(result) {
+      if (!result || !Array.isArray(result.detections) || result.detections.length === 0) {
+        detectionList.innerHTML = '<div class="small">当前没有识别到目标</div>';
+        selectedTrackEl.textContent = '未选择目标';
+        saveNameBtn.disabled = true;
+        selectedTrackId = null;
+        return;
+      }
+
+      const html = result.detections.map(det => {
+        const unknown = !!det.unknown;
+        const badge = unknown ? '<span class="badge unknown">未命名</span>' : '<span class="badge ok">已命名</span>';
+        const selectedCls = selectedTrackId === det.track_id ? ' selected' : '';
+        return `
+          <div class="person-card${selectedCls}">
+            <div class="person-main">
+              <div><b>${det.display_name}</b> <span class="small">(track: ${det.track_id})</span></div>
+              ${badge}
+            </div>
+            <div class="small">source=${det.source} face=${det.scores?.face ?? '-'} body=${det.scores?.body ?? '-'} conf=${det.confidence ?? '-'} relation=${det.relation_desc || '-'}</div>
+            <div class="name-row" style="margin-top:8px">
+              <button class="name-btn" onclick='selectTrack(${det.track_id}, ${JSON.stringify(det.display_name || "")}, ${JSON.stringify(det.relation_desc || "")}, ${unknown ? "true" : "false"})'>选中命名</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      detectionList.innerHTML = html;
+
+      if (selectedTrackId !== null) {
+        const exists = result.detections.some(d => d.track_id === selectedTrackId);
+        if (!exists) {
+          selectedTrackEl.textContent = '目标已离开画面';
+          saveNameBtn.disabled = true;
+          selectedTrackId = null;
+        }
+      }
+    }
+
+    function selectTrack(trackId, displayName, relationDesc, unknown) {
+      selectedTrackId = trackId;
+      selectedTrackEl.textContent = `track: ${trackId}`;
+      nameInputEl.value = unknown ? '' : (displayName || '');
+      relationInputEl.value = relationDesc || '';
+      saveNameBtn.disabled = false;
+      renderDetectionList(lastResult);
+    }
+    window.selectTrack = selectTrack;
+
+    async function saveName() {
+      if (selectedTrackId === null) {
+        toast('请先选中一个目标', true);
+        return;
+      }
+      const nameRaw = (nameInputEl.value || '').trim();
+      const relationRaw = (relationInputEl.value || '').trim();
+      if (!nameRaw && !relationRaw) {
+        toast('名称和关系不能同时为空', true);
+        return;
+      }
+      const name = nameRaw || null;
+      const relation = relationRaw || null;
+
+      try {
+        const res = await fetch('/api/name', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ track_id: selectedTrackId, name, relation })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        toast(`已保存：track ${data.track_id} -> 名称=${data.display_name || '-'} 关系=${data.relation_desc || '-'}`);
+        await fetchPeople();
+        if (lastResult) {
+          for (const det of lastResult.detections || []) {
+            if (det.track_id === data.track_id) {
+              det.display_name = data.display_name || det.display_name;
+              det.relation_desc = data.relation_desc || null;
+              det.unknown = !(data.display_name && String(data.display_name).trim());
+              det.person_id = data.person_id;
+            }
+          }
+          renderDetectionList(lastResult);
+        }
+      } catch (err) {
+        toast(`保存失败: ${err.message || err}`, true);
+      }
+    }
+
+    async function sendFrame() {
+      if (!running || inFlight || !video.videoWidth || !video.videoHeight) return;
+      inFlight = true;
+
+      const w = 960;
+      const h = Math.max(256, Math.round((video.videoHeight / video.videoWidth) * w));
+      capture.width = w;
+      capture.height = h;
+      captureCtx.drawImage(video, 0, 0, w, h);
+      const image = capture.toDataURL('image/jpeg', 0.75);
+
+      try {
+        const res = await fetch('/api/frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        lastResult = data;
+        drawDetections(data);
+        renderDetectionList(data);
+        metaEl.textContent = `人数=${data.count} / ${data.max_people} | 延迟=${data.latency_ms}ms | 分辨率=${data.frame_size.width}x${data.frame_size.height}`;
+      } catch (err) {
+        toast(`识别错误: ${err.message || err}`, true);
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    function loop(ts) {
+      if (!running) return;
+      if (!lastTickMs || ts - lastTickMs >= INTERVAL_MS) {
+        lastTickMs = ts;
+        sendFrame();
+      }
+      loopHandle = requestAnimationFrame(loop);
+    }
+
+    async function start() {
+      if (running) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+        });
+        video.srcObject = stream;
+        running = true;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus('识别中');
+        toast('摄像头已启动');
+        lastTickMs = 0;
+        loopHandle = requestAnimationFrame(loop);
+      } catch (err) {
+        setStatus('启动失败');
+        toast(`无法访问摄像头: ${err.message || err}`, true);
+      }
+    }
+
+    function stop() {
+      running = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus('已停止');
+      if (loopHandle) cancelAnimationFrame(loopHandle);
+      loopHandle = null;
+      inFlight = false;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+      stream = null;
+      video.srcObject = null;
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      detectionList.innerHTML = '<div class="small">已停止识别</div>';
+      selectedTrackId = null;
+      selectedTrackEl.textContent = '未选择目标';
+      nameInputEl.value = '';
+      relationInputEl.value = '';
+      saveNameBtn.disabled = true;
+    }
+
+    startBtn.addEventListener('click', start);
+    stopBtn.addEventListener('click', stop);
+    saveNameBtn.addEventListener('click', saveName);
+
+    fetchPeople();
+    setInterval(fetchPeople, 5000);
+    detectionList.innerHTML = '<div class="small">点击「开始识别」后显示结果</div>';
+  </script>
+</body>
+</html>

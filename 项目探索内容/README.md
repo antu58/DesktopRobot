@@ -19,3 +19,4 @@
 9. [2026-03-03 液态神经网络替换场景调研](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-03-03-液态神经网络替换场景调研/README.md)
 10. [2026-03-03 液态神经网络替换场景调研报告](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-03-03-液态神经网络替换场景调研/2026-03-03-液态神经网络替换场景调研报告.md)
 11. [2026-03-03 本地 Qwen3.5-0.8B GGUF 工具调用串行测试](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-03-03-本地Qwen3.5-0.8B-GGUF工具调用串行测试/README.md)
+12. [2026-03-14 人脸识别主特征 + 人体 ReID/步态辅助方案](/Users/zhangfeng/Desktop/Linux/DesktopRobot/项目探索内容/2026-03-14-人脸识别与体态辅助识别方案/2026-03-14-人脸识别主特征+人体ReID步态辅助方案.md)
